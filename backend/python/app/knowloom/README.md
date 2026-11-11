@@ -1,0 +1,115 @@
+# KnowLoom
+
+KnowLoom is a preprocessing module for entity-memory RAG.
+
+Current scope:
+
+- Split user text into blocks with an LLM.
+- Extract entities from each block concurrently.
+- Record seven controlled attribute groups for each entity:
+  `definition`, `purpose`, `core_idea`, `mechanism`, `components`,
+  `constraints`, and `related`.
+- Keep explicit `evidence` text at the attribute level.
+- Provide retry, semaphore-based concurrency control, and a circuit breaker.
+- Normalize, deduplicate, resolve, and merge extracted entities into MySQL.
+- Maintain scoped ES and Milvus entity indexes for hybrid entity retrieval.
+- Retrieve an entity memory set, build semantic/conditional dependency graphs,
+  detect cycles, topologically order related entities, and generate a structured
+  long-form answer.
+
+Structure:
+
+```text
+KnowLoom/
+  config.py              independent KnowLoom settings
+  constants.py           controlled attribute names
+  prompts.py             LLM prompts
+  cli.py                 command-line entry
+  models/                pydantic data models
+  llm/                   OpenAI-compatible client, retry, circuit breaker
+  services/              block splitting, extraction, retrieval, graphing, generation
+  entity_store/          entity dedupe, resolution, MySQL persistence
+  sql/                   MySQL table schema
+  processor.py           compatibility re-export
+  schemas.py             compatibility re-export
+```
+
+MySQL tables:
+
+- `knowloom_entities`: global entity records and matching summaries.
+- `knowloom_entity_attributes`: one row per physical attribute value.
+- `knowloom_entity_attribute_evidence`: evidence rows attached to attributes.
+- `knowloom_entity_resolution_audit`: audit trail for matched/new/ambiguous decisions.
+
+Model settings:
+
+- `KNOWLOOM_INFERENCE_MODEL`: chat/inference model for block splitting, entity extraction, and entity resolution.
+- `KNOWLOOM_EMBEDDING_API_BASE_URL` and `KNOWLOOM_EMBEDDING_API_KEY`: optional embedding-only OpenAI-compatible endpoint. When empty, embeddings fall back to `KNOWLOOM_API_BASE_URL` / `KNOWLOOM_API_KEY`.
+- `KNOWLOOM_ENTITY_ADMISSION_JUDGE_ENABLED`: enables the independent entity-admission judge after entity extraction. Defaults to `true`.
+- `KNOWLOOM_ENTITY_ADMISSION_JUDGE_MODEL`: model used only for entity-admission scoring. Defaults to `deepseek-v4-flash-0731` and reuses `KNOWLOOM_API_BASE_URL` / `KNOWLOOM_API_KEY`.
+- `KNOWLOOM_ENTITY_ADMISSION_JUDGE_THRESHOLD`: minimum judge score required to keep a candidate as an entity. Defaults to `0.7`.
+- `KNOWLOOM_EMBEDDING_MODEL`: embedding model reserved for entity vector generation.
+- `KNOWLOOM_RETRY_ATTEMPTS`, `KNOWLOOM_RETRY_BASE_DELAY_SECONDS`, and `KNOWLOOM_RETRY_MAX_DELAY_SECONDS`: LLM retry policy. Defaults retry transient failures after `2s`, `4s`, `8s`, and `16s`.
+
+Entity resolution:
+
+- ES retrieves entity name, aliases, type, and identity text.
+- Milvus retrieves the vector of `identity_description`.
+- Results are fused with RRF.
+- High confidence candidates are merged automatically, middle confidence candidates are judged by the LLM, and low confidence candidates are left ambiguous for manual review.
+
+Local indexes:
+
+- Milvus uses the local service at `KNOWLOOM_MILVUS_HOST:KNOWLOOM_MILVUS_PORT`. In the KnowLoom Docker Compose setup, its physical data is mounted at `backend/python/data/milvus`.
+- Elasticsearch uses the local service at `KNOWLOOM_ES_URL`. In the KnowLoom Docker Compose setup, its physical data is mounted at `backend/python/data/elasticsearch`.
+
+Run from `knowloom/backend/python`:
+
+```powershell
+python -m app.knowloom.cli --text "MVCC 是 InnoDB 实现读不加锁、读写不阻塞的并发机制。"
+```
+
+Or:
+
+```powershell
+python -m app.knowloom.cli --file .\sample.txt
+```
+
+The commands above only preprocess and print the extracted blocks/entities.
+To persist extracted entities into MySQL and update the ES/Milvus indexes, add
+`--ingest`:
+
+```powershell
+python -m app.knowloom.cli --file .\sample.txt --ingest
+```
+
+Query an ingested entity and generate structured content:
+
+```powershell
+python -m app.knowloom.cli --query "Transformer" --top-k 5
+```
+
+Test block splitting and entity extraction without persistence:
+
+```http
+POST /api/knowloom/extract
+{
+  "text": "死锁的必要条件包括互斥、持有并等待、不可剥夺、循环等待。"
+}
+```
+
+Inspect raw Elasticsearch, Milvus, and fused retrieval results through the API:
+
+```http
+POST /api/knowloom/index-search
+{
+  "entity": "Transformer",
+  "top_k": 5,
+  "scope": {
+    "workspace_id": "local",
+    "project_id": "knowloom",
+    "collection_id": "default",
+    "domain": "general"
+  }
+}
+```

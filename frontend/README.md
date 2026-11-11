@@ -1,6 +1,6 @@
-# Evonote Frontend
+# KnowLoom Frontend
 
-Frontend for the Evonote note app. It includes the login screen, Markdown note workspace, export controls, and a separate self-evolving note interface.
+Frontend for the KnowLoom note app. It includes the login screen, Markdown note workspace, export controls, and a separate self-evolving note interface.
 
 ## Structure
 
@@ -21,13 +21,13 @@ frontend/
 Start the FastAPI backend first:
 
 ```powershell
-cd E:\huadian\evonote\backend\python
+cd E:\huadian\knowloom\backend\python
 uvicorn app.main:app --reload
 ```
 
 Then open http://127.0.0.1:8000/ in a browser. The backend serves the login screen as the default note-space entry.
 
-The default development password is `evonote2026`.
+The default development password is `knowloom2026`.
 
 Notes are stored by the backend SQLite database, not browser cache. Typing still autosaves
 the raw Markdown note. Clicking `保存` submits the current note for L2/L3/Claims analysis,
@@ -38,6 +38,6 @@ The main workspace remains focused on Markdown writing. Click `智能整理` or 
 ## Test
 
 ```powershell
-cd E:\huadian\evonote\frontend
+cd E:\huadian\knowloom\frontend
 node .\tests\markdown.test.mjs
 ```

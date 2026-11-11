@@ -450,7 +450,7 @@ def safe_divide(numerator: float, denominator: float) -> float:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate Evonote layer1 L1/L2/L3/claim extraction quality.")
+    parser = argparse.ArgumentParser(description="Evaluate KnowLoom layer1 L1/L2/L3/claim extraction quality.")
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_PATH, help="Gold fixture JSON path.")
     parser.add_argument("--pred", type=Path, default=None, help="Prediction JSON path. Defaults to --gold for smoke baseline.")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT_PATH, help="Output metrics JSON path.")

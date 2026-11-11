@@ -13,7 +13,7 @@ assert.match(indexHtml, /id="graph-load-candidates"/);
 assert.match(indexHtml, /id="graph-generate-article"/);
 assert.match(indexHtml, /id="graph-candidate-list"/);
 
-assert.match(appSource, /\/evorag\/graph\/candidates/);
-assert.match(appSource, /\/evorag\/graph\/generate/);
+assert.match(appSource, /\/knowloom\/graph\/candidates/);
+assert.match(appSource, /\/knowloom\/graph\/generate/);
 
 console.log("ok - graph page exposes candidate selection and generation controls");

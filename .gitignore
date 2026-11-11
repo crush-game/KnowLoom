@@ -217,6 +217,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Evonote local runtime data
+# KnowLoom local runtime data
 backend/python/data/*.sqlite3
 backend/python/data/metrics/

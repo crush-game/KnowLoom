@@ -4,7 +4,7 @@ from app.core import database, evolution, metrics
 
 
 def use_temp_database(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "evonote-test.sqlite3")
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "knowloom-test.sqlite3")
     monkeypatch.setattr(metrics, "metrics_path", lambda: tmp_path / "metrics" / "evolution-runs.jsonl")
     monkeypatch.setattr(database, "_delete_external_note_indexes", lambda note_id: None)
     monkeypatch.setattr(evolution, "sync_note_indexes", lambda note, representation, claims: {})

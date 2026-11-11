@@ -8,7 +8,7 @@ from typing import Any
 from app.core import database
 from app.core.config import settings
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, settings.evolution_job_max_workers), thread_name_prefix="evonote-scan")
+_EXECUTOR = ThreadPoolExecutor(max_workers=max(1, settings.evolution_job_max_workers), thread_name_prefix="knowloom-scan")
 _LOCK = Lock()
 _SUBMITTED_JOB_IDS: set[str] = set()
 

@@ -279,7 +279,7 @@ async function loadNotes() {
 
 async function loadMergeJobs() {
   try {
-    const result = await apiRequest("/evorag/ingest-jobs?limit=20");
+    const result = await apiRequest("/knowloom/ingest-jobs?limit=20");
     mergeJobs = result.jobs || [];
     renderDashboard();
   } catch {
@@ -782,8 +782,8 @@ async function startMergePolling(jobId) {
 
 async function refreshMergeTask(jobId) {
   const [job, workerStatus] = await Promise.all([
-    apiRequest(`/evorag/ingest-jobs/${jobId}`),
-    apiRequest("/evorag/worker-status").catch((error) => ({ warnings: [error.message] })),
+    apiRequest(`/knowloom/ingest-jobs/${jobId}`),
+    apiRequest("/knowloom/worker-status").catch((error) => ({ warnings: [error.message] })),
   ]);
   currentMergeTask.job = job;
   currentMergeTask.workerStatus = workerStatus;
@@ -903,7 +903,7 @@ async function loadReviewTasksForJob(jobId) {
   reviewTaskList.innerHTML = "";
   reviewDetail.innerHTML = '<p class="review-empty">正在加载待确认内容...</p>';
 
-  const result = await apiRequest("/evorag/review-tasks?status=pending&limit=100");
+  const result = await apiRequest("/knowloom/review-tasks?status=pending&limit=100");
   reviewTasks = (result.tasks || []).filter((task) => !jobId || Number(task.job_id) === Number(jobId));
   if (!activeReviewTaskId && reviewTasks.length) {
     activeReviewTaskId = Number(reviewTasks[0].id);
@@ -1015,17 +1015,17 @@ function renderReviewDetail(task) {
 async function submitReviewDecision(task, action, reason, candidate) {
   const reviewTaskId = Number(task.id);
   if (action === "merge") {
-    await apiRequest(`/evorag/review-tasks/${reviewTaskId}/merge`, {
+    await apiRequest(`/knowloom/review-tasks/${reviewTaskId}/merge`, {
       method: "POST",
       body: JSON.stringify({ entity_id: Number(candidate.id), reason, decided_by: "manual" }),
     });
   } else if (action === "new") {
-    await apiRequest(`/evorag/review-tasks/${reviewTaskId}/new`, {
+    await apiRequest(`/knowloom/review-tasks/${reviewTaskId}/new`, {
       method: "POST",
       body: JSON.stringify({ reason, decided_by: "manual" }),
     });
   } else {
-    await apiRequest(`/evorag/review-tasks/${reviewTaskId}/reject`, {
+    await apiRequest(`/knowloom/review-tasks/${reviewTaskId}/reject`, {
       method: "POST",
       body: JSON.stringify({ candidate_entity_ids: [Number(candidate.id)], reason, decided_by: "manual" }),
     });
@@ -1057,7 +1057,7 @@ function formatScore(value) {
 function graphScopePayload() {
   return {
     workspace_id: "local",
-    project_id: "evorag",
+    project_id: "knowloom",
     collection_id: "default",
     domain: "general",
   };
@@ -1252,7 +1252,7 @@ async function loadGraphCandidates() {
   setGraphStatus("正在查询相关实体...");
 
   try {
-    const result = await apiRequest("/evorag/graph/candidates", {
+    const result = await apiRequest("/knowloom/graph/candidates", {
       method: "POST",
       body: JSON.stringify({ entity, top_k: topK, scope: graphScopePayload() }),
     });
@@ -1283,7 +1283,7 @@ async function generateGraphArticle() {
   setGraphStatus("正在生成知识图和长文...");
 
   try {
-    const result = await apiRequest("/evorag/graph/generate", {
+    const result = await apiRequest("/knowloom/graph/generate", {
       method: "POST",
       body: JSON.stringify({
         root_entity_id: graphRootEntityId,
@@ -1599,7 +1599,7 @@ async function mergeActiveNote() {
     setAppView("merge", true);
     renderMergeTask();
 
-    const response = await apiRequest("/evorag/ingest", {
+    const response = await apiRequest("/knowloom/ingest", {
       method: "POST",
       body: JSON.stringify({
         text: note.body,

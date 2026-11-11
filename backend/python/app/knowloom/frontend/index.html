@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KnowLoom 工作台</title>
+    <link rel="stylesheet" href="./styles.css?v=20260927-observability" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">KnowLoom / KnowLoom</p>
+          <h1>KnowLoom 实体记忆工作台</h1>
+        </div>
+        <form class="auth-bar" id="auth-form">
+          <input id="password" type="password" autocomplete="current-password" placeholder="登录密码" />
+          <button type="submit">登录</button>
+          <span id="auth-state" class="state-pill">未登录</span>
+        </form>
+      </header>
+
+      <section class="workspace">
+        <aside class="side-panel">
+          <h2>范围</h2>
+          <label>
+            Workspace
+            <input id="workspace-id" value="local" />
+          </label>
+          <label>
+            Project
+            <input id="project-id" value="knowloom" />
+          </label>
+          <label>
+            Collection
+            <input id="collection-id" value="default" />
+          </label>
+          <label>
+            Domain
+            <input id="domain" value="general" />
+          </label>
+        </aside>
+
+        <section class="main-grid">
+          <section class="panel ingest-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 1</p>
+                <h2>提交知识文本</h2>
+              </div>
+              <div class="action-buttons">
+                <button id="extract-btn" class="secondary-button" type="button">抽取预览</button>
+                <button id="ingest-btn" type="button">提交并入库</button>
+              </div>
+            </div>
+            <textarea
+              id="knowledge-text"
+              spellcheck="false"
+              placeholder="输入论文、文档、教材或笔记内容。系统会切分 Block、抽取实体与属性，然后合并进实体记忆库。"
+            ></textarea>
+            <div class="status-line" id="ingest-status">等待输入</div>
+            <div class="entity-strip" id="extracted-entities"></div>
+            <div class="preprocess-details" id="preprocess-details"></div>
+          </section>
+
+          <section class="panel query-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Step 2</p>
+                <h2>检索实体并生成长文本</h2>
+              </div>
+              <div class="action-buttons">
+                <button id="index-search-btn" class="secondary-button" type="button">检索诊断</button>
+                <button id="graph-candidates-btn" class="secondary-button" type="button">选择相关实体</button>
+                <button id="graph-generate-btn" class="secondary-button" type="button">生成知识图长文</button>
+                <button id="query-btn" type="button">生成</button>
+              </div>
+            </div>
+            <div class="query-row">
+              <input id="entity-query" placeholder="输入实体名，例如 Transformer" />
+              <label class="topk-control">
+                Top K
+                <input id="top-k" type="number" min="1" max="20" value="5" />
+              </label>
+            </div>
+            <div class="status-line" id="query-status">等待检索</div>
+            <div id="graph-candidates" class="graph-candidate-list"></div>
+          </section>
+
+          <section class="panel job-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Jobs</p>
+                <h2>入库任务进度</h2>
+              </div>
+              <button id="jobs-refresh-btn" class="secondary-button" type="button">刷新任务</button>
+            </div>
+            <div class="status-line" id="jobs-status">等待入库任务</div>
+            <div id="worker-summary" class="worker-summary"></div>
+            <div id="job-progress" class="job-progress"></div>
+            <div id="job-list" class="job-list"></div>
+          </section>
+
+          <section class="panel output-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Result</p>
+                <h2>生成内容</h2>
+              </div>
+              <button id="copy-answer-btn" type="button">复制</button>
+            </div>
+            <article id="answer" class="answer empty">生成结果会显示在这里。</article>
+          </section>
+
+          <section class="panel graph-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Graph</p>
+                <h2>检索与依赖</h2>
+              </div>
+            </div>
+            <div class="graph-columns">
+              <div>
+                <h3>实体</h3>
+                <div id="retrieved-entities" class="list"></div>
+              </div>
+              <div>
+                <h3>依赖边</h3>
+                <div id="graph-edges" class="list"></div>
+              </div>
+            </div>
+            <div id="warnings" class="warnings"></div>
+          </section>
+
+          <section class="panel index-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Index Search</p>
+                <h2>ES / Milvus / 融合结果</h2>
+              </div>
+            </div>
+            <div class="status-line" id="index-search-status">等待检索诊断</div>
+            <div id="backend-status" class="backend-status"></div>
+            <div id="index-timings" class="timing-grid"></div>
+            <div class="index-columns">
+              <div>
+                <h3>Elasticsearch</h3>
+                <div id="es-results" class="index-list"></div>
+              </div>
+              <div>
+                <h3>Milvus</h3>
+                <div id="milvus-results" class="index-list"></div>
+              </div>
+              <div>
+                <h3>融合结果</h3>
+                <div id="fused-results" class="index-list"></div>
+              </div>
+            </div>
+            <div id="index-warnings" class="warnings"></div>
+          </section>
+
+          <section class="panel review-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Review</p>
+                <h2>实体合并人工审核</h2>
+              </div>
+              <button id="review-refresh-btn" class="secondary-button" type="button">刷新审核</button>
+            </div>
+            <div class="status-line" id="review-status">等待加载审核任务</div>
+            <div id="review-tasks" class="review-list"></div>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="./app.js?v=20260927-observability"></script>
+  </body>
+</html>

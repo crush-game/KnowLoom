@@ -143,7 +143,7 @@ def probe_batch_support(client: OpenAI, levels: tuple[int, ...]) -> list[ProbeRe
     results: list[ProbeResult] = []
 
     for level in levels:
-        texts = [f"evonote batch probe text {index}" for index in range(level)]
+        texts = [f"knowloom batch probe text {index}" for index in range(level)]
         started = time.perf_counter()
 
         try:
@@ -189,7 +189,7 @@ def probe_single_request_concurrency(client: OpenAI, levels: tuple[int, ...]) ->
                 executor.submit(
                     embedding_request,
                     client,
-                    f"evonote concurrency probe level {level}, request {index}",
+                    f"knowloom concurrency probe level {level}, request {index}",
                 )
                 for index in range(level)
             ]

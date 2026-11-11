@@ -1,18 +1,18 @@
-# Evonote FastAPI
+# KnowLoom FastAPI
 
-FastAPI backend scaffold for Evonote.
+FastAPI backend scaffold for KnowLoom.
 
 ## Quick start
 
 ```powershell
-cd E:\huadian\evonote\backend\python
+cd E:\huadian\knowloom\backend\python
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Open http://127.0.0.1:8000/ for the Evonote login screen.
+Open http://127.0.0.1:8000/ for the KnowLoom login screen.
 Open http://127.0.0.1:8000/evolution for the standalone self-evolving note interface after login.
 Open http://127.0.0.1:8000/docs for the interactive API docs.
 
@@ -20,7 +20,7 @@ Open http://127.0.0.1:8000/docs for the interactive API docs.
 
 - `POST /api/auth/login`: submit a password and receive a bearer token for the current development login flow.
 
-The default development password is `evonote2026`. Override it in `.env` before sharing or deploying the app:
+The default development password is `knowloom2026`. Override it in `.env` before sharing or deploying the app:
 
 ```text
 AUTH_PASSWORD=your-password
@@ -33,16 +33,16 @@ For production, set `APP_ENV=production` or `ENFORCE_SECURE_CONFIG=true`, replac
 
 ## Notes API
 
-Evonote stores notes in SQLite by default:
+KnowLoom stores notes in SQLite by default:
 
 ```text
-data/evonote.sqlite3
+data/knowloom.sqlite3
 ```
 
 Override the path in `.env` when needed:
 
 ```text
-SQLITE_DATABASE_PATH=data/evonote.sqlite3
+SQLITE_DATABASE_PATH=data/knowloom.sqlite3
 ```
 
 - `GET /api/notes`: list notes.
@@ -58,7 +58,7 @@ PDF and Word export are generated with Python's standard library.
 
 ## Evolution API
 
-Evonote maintains extra knowledge layers for every note:
+KnowLoom maintains extra knowledge layers for every note:
 
 - `L1`: the original Markdown note body.
 - `L2`: a model-generated short summary for reading and model context.
@@ -130,7 +130,7 @@ CLAIM_JUDGE_LOW_CONFIDENCE_THRESHOLD=0.68
 
 ## Hybrid retrieval
 
-After a note is scanned, Evonote embeds L2/L3/claim text, writes claim vectors to Milvus,
+After a note is scanned, KnowLoom embeds L2/L3/claim text, writes claim vectors to Milvus,
 writes keyword/search documents to Elasticsearch, then uses RRF to fuse vector and keyword
 retrieval results before generating merge suggestions.
 
@@ -145,10 +145,10 @@ EMBEDDING_DIMENSIONS=3072
 MILVUS_HOST=localhost
 MILVUS_PORT=19530
 MILVUS_TOKEN=
-MILVUS_COLLECTION=evonote_claims
+MILVUS_COLLECTION=knowloom_claims
 
 ES_URL=http://127.0.0.1:9200
-ES_INDEX=evonote_claims
+ES_INDEX=knowloom_claims
 RETRIEVAL_TOP_K=20
 RRF_K=60
 EXTERNAL_RETRY_ATTEMPTS=3
@@ -164,10 +164,10 @@ with the settings above. Indexing failures are reported in rebuild results and d
 raw note storage.
 
 Start the app, Milvus, and Elasticsearch with Docker Compose from the project root.
-Runtime data is stored under `E:\huadian\evonote\backend\python\data`:
+Runtime data is stored under `E:\huadian\knowloom\backend\python\data`:
 
 ```powershell
-cd E:\huadian\evonote
+cd E:\huadian\knowloom
 docker compose up -d --build
 ```
 

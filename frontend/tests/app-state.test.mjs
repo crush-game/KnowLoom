@@ -14,7 +14,7 @@ console.log("ok - empty merge task keeps idle defaults");
 
 const sample = createSampleNotePayload();
 assert.equal(sample.title, "Markdown 示例");
-assert.match(sample.body, /console\.log\('Evonote'\);/);
+assert.match(sample.body, /console\.log\('KnowLoom'\);/);
 console.log("ok - sample note payload keeps markdown example");
 
 assert.deepEqual(MERGE_STAGES.map((stage) => stage.key), [

@@ -4,7 +4,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 APP_ROOT = PROJECT_ROOT.parent.parent
 FRONTEND_ROOT = APP_ROOT / "frontend"
-EVORAG_FRONTEND_ROOT = PROJECT_ROOT / "app" / "EvoRAG" / "frontend"
+KNOWLOOM_FRONTEND_ROOT = PROJECT_ROOT / "app" / "knowloom" / "frontend"
 # print(PROJECT_ROOT)
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
@@ -15,18 +15,18 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.auth import router as auth_router
-from app.api.routes.evorag import router as evorag_router
+from app.api.routes.knowloom import router as knowloom_router
 from app.api.routes.evolution import router as evolution_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge import router as knowledge_router
 from app.api.routes.notes import router as notes_router
 from app.core.database import init_db
 from app.core.config import cors_allowed_origins, settings
-from app.core.evorag_database import initialize_evorag_database
+from app.core.knowloom_database import initialize_knowloom_database
 from app.core.evolution_jobs import recover_pending_scan_jobs, shutdown_scan_jobs
 from app.core.retrieval import close_retrieval_backends, initialize_retrieval_backends
 from app.core.security import validate_security_settings
-from app.EvoRAG.entity_store.worker import shutdown_entity_merge_workers, start_entity_merge_workers
+from app.knowloom.entity_store.worker import shutdown_entity_merge_workers, start_entity_merge_workers
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug)
 
@@ -43,14 +43,14 @@ app.include_router(health_router, prefix="/api")
 app.include_router(knowledge_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(evolution_router, prefix="/api")
-app.include_router(evorag_router, prefix="/api")
+app.include_router(knowloom_router, prefix="/api")
 
 
 @app.on_event("startup")
 def startup() -> None:
     validate_security_settings()
     init_db()
-    initialize_evorag_database()
+    initialize_knowloom_database()
     initialize_retrieval_backends()
     recover_pending_scan_jobs()
     start_entity_merge_workers()
@@ -63,7 +63,7 @@ def shutdown() -> None:
     close_retrieval_backends()
 
 app.mount("/static", StaticFiles(directory=FRONTEND_ROOT), name="static")
-app.mount("/evorag", StaticFiles(directory=EVORAG_FRONTEND_ROOT, html=True), name="evorag")
+app.mount("/knowloom", StaticFiles(directory=KNOWLOOM_FRONTEND_ROOT, html=True), name="knowloom")
 
 
 @app.get("/")

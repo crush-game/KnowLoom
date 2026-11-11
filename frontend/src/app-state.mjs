@@ -39,7 +39,7 @@ export function createEmptyMergeTask() {
 export function createSampleNotePayload() {
   return {
     title: "Markdown 示例",
-    tags: "markdown, evonote",
+    tags: "markdown, knowloom",
     body: [
       "# 今天的笔记",
       "",
@@ -49,7 +49,7 @@ export function createSampleNotePayload() {
       "- 把结论放在最后",
       "",
       "```js",
-      "console.log('Evonote');",
+      "console.log('KnowLoom');",
       "```",
     ].join("\n"),
   };

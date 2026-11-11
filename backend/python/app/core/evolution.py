@@ -45,7 +45,7 @@ CONFLICT_PAIRS = (
 )
 
 BLOCK_ANALYSIS_SYSTEM_PROMPT = """
-你是 Evonote 的 block 级知识结构化智能体。输入是一篇 Markdown 笔记已经切分后的 blocks，不是完整原文让你重新分段。
+你是 KnowLoom 的 block 级知识结构化智能体。输入是一篇 Markdown 笔记已经切分后的 blocks，不是完整原文让你重新分段。
 
 你的任务：
 - 汇总所有 blocks，生成 note 级 L2 摘要、L3 检索表达和关键词。
@@ -99,7 +99,7 @@ JSON 格式：
 ANALYSIS_SYSTEM_PROMPT = BLOCK_ANALYSIS_SYSTEM_PROMPT
 
 CLAIM_RELATION_JUDGE_SYSTEM_PROMPT = """
-你是 Evonote 的 Claim 关系裁判。你需要判断两条原子知识 claim 的关系。
+你是 KnowLoom 的 Claim 关系裁判。你需要判断两条原子知识 claim 的关系。
 
 只允许输出四类关系：
 - duplicate：两条 claim 表达的是同一事实或几乎等价的事实。

@@ -4,7 +4,7 @@ from app.core import database
 
 
 def use_temp_database(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "evonote-test.sqlite3")
+    monkeypatch.setattr(database, "DATABASE_PATH", tmp_path / "knowloom-test.sqlite3")
 
 
 def add_analysis(note_id: str) -> None:

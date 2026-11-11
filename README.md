@@ -1,26 +1,36 @@
-# EvoNote｜基于实体记忆与知识图谱的自进化知识管理系统
+# KnowLoom｜学校规章制度知识库
 
 **技术栈：** Python、FastAPI、MySQL、Redis、Elasticsearch、Milvus、LLM、Asyncio
 
-**项目背景：** 针对飞书笔记、腾讯 ima 等知识管理产品侧重内容存储与检索问答、跨文档细粒度知识融合和持续治理仍需用户参与的问题，以及传统 GraphRAG 社区摘要与图索引维护存在较高更新开销的局限，设计以**实体-属性-证据为最小维护单元**的自进化记忆系统，实现知识精确分离、历史经验复用、增量融合及依赖图驱动的结构化长文本生成。
+KnowLoom 是面向高校规章制度的知识库原型，服务学生、辅导员、教学秘书的制度查询，以及制度管理员的文件维护与冲突审核。系统聚焦转专业、休学、学位申请、推免、奖助评定、学业预警等制度事项，以及相关机构和校内术语；它不是通用笔记系统，也不对个人是否符合某项资格作结论。
 
-**项目亮点与细节：**
+## 系统定位
 
-- **知识精确分离：** 针对固定长度切块破坏实体语义边界、章节标题和流程步骤易被误识别为独立实体的问题，设计**实体锚点语义切块与双阶段准入机制**。首先通过可定义性、查询价值等 **5 维指标**进行实体初筛（阈值 0.7），再由独立 LLM Judge 结合**身份边界、知识承载、查询价值、演进稳定性 4 项正向指标及 6 项反向惩罚指标**复核；通过原文覆盖校验、确定性二次切分与异常降级，完成实体、属性及 Evidence 的结构化分离。
-- **记忆引导检索：** 针对传统 Hybrid Retrieval 反复执行 Embedding、向量召回及 LLM 消歧造成的资源浪费，设计 **Memory-Guarded Hybrid Retrieval**，优先通过 Redis 关系缓存与 MySQL Relation Memory 复用历史消歧经验，结合 Entity Admission Guard、Relation Guard 过滤伪实体及已知关系；经验不足时回退至 Elasticsearch + Milvus 双路召回，使用 RRF（k=60）融合候选，实现经验优先、混合检索兜底的分层决策。
-- **细粒度知识融合：** 针对跨 Block 重复实体及直接 Append/Overwrite 导致知识冗余、语义误合并的问题，采用名称归一化、Alias 聚合、属性 Fingerprint 去重与 Evidence 合并构建统一 IncomingEntity；通过 `new / matched / ambiguous` 三态实体消歧控制新实体创建、历史实体合并与人工审核，并基于 `entity_id + attr_type + scope` 执行属性级 Top-K 混合检索，将知识演进划分为 `add / merge / enrich / update / conflict / review` 六类决策，避免简单覆盖历史事实。
-- **历史 Trace 与知识自进化：** 借鉴 **Mem0、Zep、TiMem** 的记忆治理思想，设计**历史事件追踪与反馈驱动的知识演进机制**，记录 Claim 的 Before/After、Diff、来源 Evidence、决策原因及 Correction，并将历史 Event Summary 引入后续合并判断。设计多级经验沉淀策略：Hybrid Top-1 分数位于 **[0.7, 0.85]** 或 ES/Milvus 分数差值 **> 0.4** 时进入人工复核策略；Final Judge 判定 `new` 且 Top-1 分数 **≥ 0.85** 时写入强 Reject 经验，防止高相似异义实体反复误合并；将 Allow/Reject 关系持久化并在后续检索中复用，形成持续反馈闭环。
-- **知识图谱与长文本生成：** 针对传统 RAG 直接拼接检索片段导致依赖关系缺失、上下文冗余的问题，构建**语义依赖图与条件依赖图**，根据实体属性和关联证据建立知识边；采用 **Tarjan 算法识别强连通分量并检测循环依赖**，结合根节点优先的拓扑组织生成结构化 Outline，支持按关键词检索、选择关联实体及按依赖顺序生成长文本，避免重复进行全量知识重组。
-- **异步调度与可靠性：** 针对长文本多 Block 处理延迟高、局部故障影响整体流程的问题，采用 `Semaphore + asyncio.gather` 实现受控并发与任务级异常隔离；通过 MySQL 持久化任务状态、Worker 异步消费、失败重试与重启恢复保障处理链路，并设置独立 Merge 并发上限及低置信度人工审核机制；基于 MySQL、ES、Milvus、Redis 分层存储，实现实体属性的局部更新与索引增量同步。
+学校制度常常分散在学校规定、学院细则、年度通知、修订通知和办事指南中；同一事项还可能因生效时间、学生类别、年级或学院不同而存在并行规则。KnowLoom 将这类内容按“**原文层 + 实体层**”维护：
 
+- **原文层**保留每份制度文件及其条文，作为完整、可回看的证据来源。
+- **实体层**将制度事项、机构与术语组织为可检索的属性和关系，并为属性保留证据、适用范围和历史演进信息。
+- **写入时治理**优先处理版本、修订、废止与属性冲突，避免只在问答时临时拼接互相矛盾的材料。
+
+## 能力与边界
+
+- 维护学校及上级部门发布的规定、办法、实施细则、修订或废止通知、年度工作通知、办事指南和常见问题。
+- 支持将同一制度事项在多份文件中的条件、流程、时限、材料和责任部门汇总，并为结果保留出处。
+- 支持按年级、学生类别、学院等适用范围区分并存规定；旧规定不被直接删除，可保留为历史记录。
+- 由制度管理员处理需要人工确认的事实性冲突和废止关系。
+- 不做多条件的个人资格判定、全局总结或社区摘要，也不进行联网核验；回答仅以管理员维护的制度文件为依据。
+
+## 当前代码基线
+
+当前基线已经具备文本预处理、实体/属性抽取、异步入库、混合检索和结构化结果渲染能力。后续迭代会依次补齐文件原文与版本回链、制度属性槽位、冲突审核、带引用的自由问答、文件上传和条文级切分能力。
 
 ## 项目展示
 
-![GraphRAG 与 EvoNote 核心区别](docs/images/graphrag-vs-evonote.png)
+![GraphRAG 与 KnowLoom 核心区别](docs/images/graphrag-vs-knowloom.png)
 
-![EvoNote 知识图谱与长文本生成界面](docs/images/evonote-knowledge-generation.png)
+![KnowLoom 知识图谱与长文本生成界面](docs/images/knowloom-knowledge-generation.png)
 
-![EvoNote 实体合并与异步处理流程](docs/images/evonote-merge-pipeline.png)
+![KnowLoom 实体合并与异步处理流程](docs/images/knowloom-merge-pipeline.png)
 
 
 ## 本地启动教程
@@ -43,7 +53,7 @@ docker compose version
 进入后端目录：
 
 ```powershell
-cd E:\huadian\evonote\backend\python
+cd E:\huadian\knowloom\backend\python
 ```
 
 如果还没有 `.env` 文件，可以从示例文件复制一份：
@@ -70,7 +80,7 @@ EMBEDDING_MODEL=text-embedding-3-large
 回到项目根目录：
 
 ```powershell
-cd E:\huadian\evonote
+cd E:\huadian\knowloom
 ```
 
 只启动检索依赖，不启动 app 容器：
@@ -88,8 +98,8 @@ docker compose ps
 正常情况下能看到：
 
 ```text
-evonote-elasticsearch
-evonote-milvus
+knowloom-elasticsearch
+knowloom-milvus
 ```
 
 如果需要查看日志：
@@ -104,7 +114,7 @@ docker compose logs -f milvus
 进入后端 Python 目录：
 
 ```powershell
-cd E:\huadian\evonote\backend\python
+cd E:\huadian\knowloom\backend\python
 ```
 
 创建并激活虚拟环境：
@@ -149,7 +159,7 @@ http://127.0.0.1:8000/docs
 默认开发密码：
 
 ```text
-evonote2026
+knowloom2026
 ```
 
 ### 6. 停止服务
@@ -159,7 +169,7 @@ evonote2026
 停止 Elasticsearch 和 Milvus：
 
 ```powershell
-cd E:\huadian\evonote
+cd E:\huadian\knowloom
 docker compose down
 ```
 
@@ -180,13 +190,13 @@ POST http://127.0.0.1:8000/api/evolution/index/rebuild
 运行 embedding 并发探测：
 
 ```powershell
-cd E:\huadian\evonote\backend\python\tests
+cd E:\huadian\knowloom\backend\python\tests
 python .\probe_embedding_concurrency.py
 ```
 
 运行 embedding AB 测试：
 
 ```powershell
-cd E:\huadian\evonote\backend\python
+cd E:\huadian\knowloom\backend\python
 python tests\benchmark_embedding_ab.py
 ```

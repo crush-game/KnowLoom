@@ -10,8 +10,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
 
-DEFAULT_AUTH_PASSWORD = "evonote2026"
-DEFAULT_AUTH_TOKEN = "evonote-dev-token"
+DEFAULT_AUTH_PASSWORD = "knowloom2026"
+DEFAULT_AUTH_TOKEN = "knowloom-dev-token"
 TOKEN_VERSION = "v1"
 bearer_scheme = HTTPBearer(auto_error=False)
 

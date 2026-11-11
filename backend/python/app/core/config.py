@@ -8,7 +8,7 @@ ENV_FILE = PROJECT_ROOT / ".env"
 
 
 class Settings(BaseSettings):
-    app_name: str = "Evonote API"
+    app_name: str = "KnowLoom API"
     app_env: str = "development"
     app_debug: bool = True
     host: str = "127.0.0.1"
@@ -45,10 +45,10 @@ class Settings(BaseSettings):
     milvus_host: str = "localhost"
     milvus_port: int = 19530
     milvus_token: str = ""
-    milvus_collection: str = "evonote_claims"
+    milvus_collection: str = "knowloom_claims"
 
     es_url: str = "http://127.0.0.1:9200"
-    es_index: str = "evonote_claims"
+    es_index: str = "knowloom_claims"
 
     retrieval_top_k: int = 20
     rrf_k: int = 60
@@ -56,9 +56,9 @@ class Settings(BaseSettings):
     external_retry_base_delay_seconds: float = 0.5
     external_retry_max_delay_seconds: float = 4.0
 
-    auth_password: str = "evonote2026"
+    auth_password: str = "knowloom2026"
     auth_password_hash: str = ""
-    auth_token: str = "evonote-dev-token"
+    auth_token: str = "knowloom-dev-token"
     auth_token_ttl_seconds: int = 86400
     cors_allowed_origins: str = ""
     enforce_secure_config: bool = False
@@ -66,12 +66,12 @@ class Settings(BaseSettings):
     evolution_job_max_workers: int = 1
     evolution_job_max_attempts: int = 3
 
-    sqlite_database_path: str = "data/evonote.sqlite3"
+    sqlite_database_path: str = "data/knowloom.sqlite3"
 
     redis_host: str = "127.0.0.1"
     redis_port: int = 6379
     redis_db: int = 0
-    redis_password: str | None = "Evonote@2026"
+    redis_password: str | None = "KnowLoom@2026"
     redis_url: str = "redis://127.0.0.1:6379/0"
     redis_cache_ttl_seconds: int = 3600
 

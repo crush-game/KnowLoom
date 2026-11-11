@@ -75,7 +75,7 @@ def generate_predictions(gold_path: Path, output_path: Path, *, limit: int | Non
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate real Evonote Layer1 predictions with the configured LLM.")
+    parser = argparse.ArgumentParser(description="Generate real KnowLoom Layer1 predictions with the configured LLM.")
     parser.add_argument("--gold", type=Path, default=DEFAULT_GOLD_PATH, help="Gold fixture JSON path.")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUTPUT_PATH, help="Prediction output JSON path.")
     parser.add_argument("--limit", type=int, default=None, help="Optional number of notes to generate for a quick live run.")

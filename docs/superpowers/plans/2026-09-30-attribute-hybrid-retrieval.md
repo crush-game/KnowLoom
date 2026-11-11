@@ -35,10 +35,10 @@
 ### Task 1: Attribute Records, Results, and Repository Queries
 
 **Files:**
-- Modify: `backend/python/app/EvoRAG/entity_store/models.py`
-- Modify: `backend/python/app/EvoRAG/entity_store/repository.py`
-- Modify: `backend/python/app/EvoRAG/config.py`
-- Test: `backend/python/tests/EvoRAG/test_attribute_repository.py`
+- Modify: `backend/python/app/knowloom/entity_store/models.py`
+- Modify: `backend/python/app/knowloom/entity_store/repository.py`
+- Modify: `backend/python/app/knowloom/config.py`
+- Test: `backend/python/tests/knowloom/test_attribute_repository.py`
 
 **Interfaces:**
 - Produces: `StoredEntityAttribute`, `AttributeCandidate`, `AttributeRetrievalResult`, and `AttributeRetrievalError`.
@@ -49,11 +49,11 @@
 
 - [ ] **Step 1: Write failing model and configuration tests**
 
-Add tests asserting defaults: threshold `20`, hybrid Top-K `10`, RRF constant `60`, Milvus concurrency `4`, backfill batch size `100`, ES index `evorag_entity_attributes`, and Milvus collection `evorag_entity_attributes`. Assert result models preserve `input_index`, raw backend scores, fused score, warnings, and mode.
+Add tests asserting defaults: threshold `20`, hybrid Top-K `10`, RRF constant `60`, Milvus concurrency `4`, backfill batch size `100`, ES index `knowloom_entity_attributes`, and Milvus collection `knowloom_entity_attributes`. Assert result models preserve `input_index`, raw backend scores, fused score, warnings, and mode.
 
 - [ ] **Step 2: Run the model tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_repository.py -k "config or model"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_repository.py -k "config or model"`
 
 Expected: FAIL because the settings and models do not exist.
 
@@ -63,7 +63,7 @@ Implement the dataclasses and exact settings named in the Interfaces and Step 1.
 
 - [ ] **Step 4: Run model tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_repository.py -k "config or model"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_repository.py -k "config or model"`
 
 Expected: PASS.
 
@@ -73,7 +73,7 @@ Use a recording fake cursor to assert each method issues one bounded query, alwa
 
 - [ ] **Step 6: Run repository tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_repository.py -k repository`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_repository.py -k repository`
 
 Expected: FAIL because repository methods are missing.
 
@@ -83,23 +83,23 @@ Add the four exact signatures from Interfaces and a private row mapper. Use para
 
 - [ ] **Step 8: Run Task 1 tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_repository.py`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_repository.py`
 
 Expected: PASS.
 
 - [ ] **Step 9: Commit Task 1**
 
 ```bash
-git add backend/python/app/EvoRAG/config.py backend/python/app/EvoRAG/entity_store/models.py backend/python/app/EvoRAG/entity_store/repository.py backend/python/tests/EvoRAG/test_attribute_repository.py
+git add backend/python/app/knowloom/config.py backend/python/app/knowloom/entity_store/models.py backend/python/app/knowloom/entity_store/repository.py backend/python/tests/knowloom/test_attribute_repository.py
 git commit -m "feat: add attribute retrieval repository primitives"
 ```
 
 ### Task 2: Attribute Elasticsearch and Milvus Index
 
 **Files:**
-- Create: `backend/python/app/EvoRAG/indexes/attribute_hybrid.py`
-- Modify: `backend/python/app/EvoRAG/indexes/__init__.py`
-- Test: `backend/python/tests/EvoRAG/test_attribute_hybrid_index.py`
+- Create: `backend/python/app/knowloom/indexes/attribute_hybrid.py`
+- Modify: `backend/python/app/knowloom/indexes/__init__.py`
+- Test: `backend/python/tests/knowloom/test_attribute_hybrid_index.py`
 
 **Interfaces:**
 - Consumes: `StoredEntityAttribute`, `AttributeCandidate`, and new attribute index settings from Task 1.
@@ -116,7 +116,7 @@ Assert the ES mapping has keyword/numeric filters and text `value_text`. Assert 
 
 - [ ] **Step 2: Run schema tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_hybrid_index.py -k "schema or embedding_text"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_hybrid_index.py -k "schema or embedding_text"`
 
 Expected: FAIL because the module does not exist.
 
@@ -126,7 +126,7 @@ Create `AttributeHybridIndex` following the existing entity index client-selecti
 
 - [ ] **Step 4: Run schema tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_hybrid_index.py -k "schema or embedding_text"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_hybrid_index.py -k "schema or embedding_text"`
 
 Expected: PASS.
 
@@ -136,7 +136,7 @@ Assert ES upsert uses one bulk request, Milvus upsert receives one document list
 
 - [ ] **Step 6: Run batch tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_hybrid_index.py -k "upsert or existing or search"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_hybrid_index.py -k "upsert or existing or search"`
 
 Expected: FAIL because batch operations are missing.
 
@@ -146,25 +146,25 @@ Use the Elasticsearch 8 client `bulk(operations=[...])` and `msearch(searches=[.
 
 - [ ] **Step 8: Run Task 2 tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_hybrid_index.py`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_hybrid_index.py`
 
 Expected: PASS.
 
 - [ ] **Step 9: Commit Task 2**
 
 ```bash
-git add backend/python/app/EvoRAG/indexes/attribute_hybrid.py backend/python/app/EvoRAG/indexes/__init__.py backend/python/tests/EvoRAG/test_attribute_hybrid_index.py
+git add backend/python/app/knowloom/indexes/attribute_hybrid.py backend/python/app/knowloom/indexes/__init__.py backend/python/tests/knowloom/test_attribute_hybrid_index.py
 git commit -m "feat: add attribute ES and Milvus index"
 ```
 
 ### Task 3: Exact and Adaptive Full-Scan Retrieval
 
 **Files:**
-- Create: `backend/python/app/EvoRAG/entity_store/attribute_retriever.py`
-- Test: `backend/python/tests/EvoRAG/test_attribute_retriever.py`
+- Create: `backend/python/app/knowloom/entity_store/attribute_retriever.py`
+- Test: `backend/python/tests/knowloom/test_attribute_retriever.py`
 
 **Interfaces:**
-- Consumes: repository methods from Task 1, `EvoRAGEmbeddingClient`, and `AttributeHybridIndex`.
+- Consumes: repository methods from Task 1, `KnowLoomEmbeddingClient`, and `AttributeHybridIndex`.
 - Produces: `AttributeCandidateRetriever.retrieve(entity: StoredEntity, incoming_attributes: list[EntityAttributeInput]) -> list[AttributeRetrievalResult]`.
 - Produces: private positional request records retaining `input_index`, type, text, fingerprint, and group size.
 
@@ -174,7 +174,7 @@ Assert an empty input returns `[]` with no dependency calls. Assert exact lookup
 
 - [ ] **Step 2: Run exact tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "empty or exact"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "empty or exact"`
 
 Expected: FAIL because the retriever does not exist.
 
@@ -184,7 +184,7 @@ Build fingerprints with the existing `text_fingerprint`; make one repository exa
 
 - [ ] **Step 4: Run exact tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "empty or exact"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "empty or exact"`
 
 Expected: PASS.
 
@@ -194,7 +194,7 @@ Assert count `19` returns all same-type active rows as mode `full_scan`; count `
 
 - [ ] **Step 6: Run threshold tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "threshold or full_scan"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "threshold or full_scan"`
 
 Expected: FAIL because adaptive routing is incomplete.
 
@@ -204,23 +204,23 @@ Count only unmatched types, load all small types in one call, partition rows by 
 
 - [ ] **Step 8: Run Task 3 tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "empty or exact or threshold or full_scan"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "empty or exact or threshold or full_scan"`
 
 Expected: PASS.
 
 - [ ] **Step 9: Commit Task 3**
 
 ```bash
-git add backend/python/app/EvoRAG/entity_store/attribute_retriever.py backend/python/tests/EvoRAG/test_attribute_retriever.py
+git add backend/python/app/knowloom/entity_store/attribute_retriever.py backend/python/tests/knowloom/test_attribute_retriever.py
 git commit -m "feat: add adaptive attribute full-scan retrieval"
 ```
 
 ### Task 4: Hybrid Orchestration, Index Repair, and RRF
 
 **Files:**
-- Modify: `backend/python/app/EvoRAG/entity_store/attribute_retriever.py`
-- Modify: `backend/python/app/EvoRAG/entity_store/__init__.py`
-- Test: `backend/python/tests/EvoRAG/test_attribute_retriever.py`
+- Modify: `backend/python/app/knowloom/entity_store/attribute_retriever.py`
+- Modify: `backend/python/app/knowloom/entity_store/__init__.py`
+- Test: `backend/python/tests/knowloom/test_attribute_retriever.py`
 
 **Interfaces:**
 - Consumes: all Task 1-3 interfaces.
@@ -233,7 +233,7 @@ Assert all large-group query texts use one embedding call. Assert ES receives al
 
 - [ ] **Step 2: Run hybrid batching tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "embedding_batch or es_msearch or milvus_group"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "embedding_batch or es_msearch or milvus_group"`
 
 Expected: FAIL because hybrid orchestration is incomplete.
 
@@ -243,7 +243,7 @@ Embed query texts once, call ES once through `asyncio.to_thread`, group Milvus r
 
 - [ ] **Step 4: Run hybrid batching tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "embedding_batch or es_msearch or milvus_group"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "embedding_batch or es_msearch or milvus_group"`
 
 Expected: PASS.
 
@@ -253,7 +253,7 @@ Provide active DB records where each backend lacks a different subset. Assert on
 
 - [ ] **Step 6: Run repair tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k index_repair`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k index_repair`
 
 Expected: FAIL because index repair is missing.
 
@@ -263,7 +263,7 @@ Load active records for large types, query existing IDs in both stores, embed th
 
 - [ ] **Step 8: Run repair tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k index_repair`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k index_repair`
 
 Expected: PASS.
 
@@ -273,7 +273,7 @@ Assert RRF scores and ordering are isolated per input index. Return fake stale, 
 
 - [ ] **Step 10: Run fusion/failure tests and verify failure**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py -k "rrf or hydration or backend_failure"`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py -k "rrf or hydration or backend_failure"`
 
 Expected: FAIL because final fusion and degradation are incomplete.
 
@@ -283,22 +283,22 @@ Fuse IDs first, hydrate the union in one MySQL call, validate entity/type/status
 
 - [ ] **Step 12: Run Task 4 tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_retriever.py`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_retriever.py`
 
 Expected: PASS.
 
 - [ ] **Step 13: Commit Task 4**
 
 ```bash
-git add backend/python/app/EvoRAG/entity_store/attribute_retriever.py backend/python/app/EvoRAG/entity_store/__init__.py backend/python/tests/EvoRAG/test_attribute_retriever.py
+git add backend/python/app/knowloom/entity_store/attribute_retriever.py backend/python/app/knowloom/entity_store/__init__.py backend/python/tests/knowloom/test_attribute_retriever.py
 git commit -m "feat: add batched hybrid attribute retrieval"
 ```
 
 ### Task 5: Regression Verification
 
 **Files:**
-- Verify: `backend/python/app/EvoRAG/**`
-- Verify: `backend/python/tests/EvoRAG/**`
+- Verify: `backend/python/app/knowloom/**`
+- Verify: `backend/python/tests/knowloom/**`
 
 **Interfaces:**
 - Consumes: completed attribute retrieval subsystem.
@@ -306,19 +306,19 @@ git commit -m "feat: add batched hybrid attribute retrieval"
 
 - [ ] **Step 1: Run focused attribute tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG/test_attribute_repository.py backend/python/tests/EvoRAG/test_attribute_hybrid_index.py backend/python/tests/EvoRAG/test_attribute_retriever.py`
+Run: `pytest -q backend/python/tests/knowloom/test_attribute_repository.py backend/python/tests/knowloom/test_attribute_hybrid_index.py backend/python/tests/knowloom/test_attribute_retriever.py`
 
 Expected: PASS.
 
-- [ ] **Step 2: Run all EvoRAG tests**
+- [ ] **Step 2: Run all KnowLoom tests**
 
-Run: `pytest -q backend/python/tests/EvoRAG`
+Run: `pytest -q backend/python/tests/knowloom`
 
 Expected: PASS, with live tests skipped when their credentials are absent.
 
 - [ ] **Step 3: Run syntax compilation**
 
-Run: `python -m compileall -q backend/python/app/EvoRAG`
+Run: `python -m compileall -q backend/python/app/knowloom`
 
 Expected: exit code 0.
 
@@ -331,6 +331,6 @@ Expected: no whitespace errors; only plan/spec and scoped implementation/test fi
 - [ ] **Step 5: Commit verification adjustments if needed**
 
 ```bash
-git add backend/python/app/EvoRAG backend/python/tests/EvoRAG docs/superpowers
+git add backend/python/app/knowloom backend/python/tests/knowloom docs/superpowers
 git commit -m "test: verify attribute hybrid retrieval"
 ```
