@@ -26,7 +26,7 @@ ENTITY_RESOLUTION_SYSTEM_PROMPT = """
 
 判断依据：
 - 名称、别名、实体类型
-- definition / purpose / mechanism / related 等简述
+- definition / purpose / procedure / conditions / related 等简述
 - 不要引入外部知识；只根据输入判断
 
 输出要求：

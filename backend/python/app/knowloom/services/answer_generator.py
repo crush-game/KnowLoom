@@ -1,15 +1,8 @@
 from app.knowloom.models import DependencyGraph, RetrievedEntity, StoredAttribute
 
 
-ATTRIBUTE_TITLES = {
-    "definition": "定义",
-    "core_idea": "核心思想",
-    "purpose": "目的",
-    "mechanism": "机制",
-    "components": "组成与依赖",
-    "constraints": "条件与边界",
-    "related": "相关概念",
-}
+from app.knowloom.constants import SLOT_SPECS, slot_spec
+
 
 
 class StructuredAnswerGenerator:
@@ -55,11 +48,11 @@ class StructuredAnswerGenerator:
         if entity.identity_description:
             lines.extend(["", entity.identity_description])
 
-        for attr_type, title in ATTRIBUTE_TITLES.items():
-            attributes = [attribute for attribute in entity.attributes if attribute.attr_type == attr_type]
+        for spec in SLOT_SPECS:
+            attributes = [attribute for attribute in entity.attributes if attribute.attr_type == spec.key]
             if not attributes:
                 continue
-            lines.extend(["", f"### {title}"])
+            lines.extend(["", f"### {spec.title}"])
             for attribute in attributes[:6]:
                 lines.append(f"- {attribute.value_text}{self.citations_for(attribute, source_numbers)}")
         if len(lines) == 1:
@@ -114,7 +107,7 @@ class StructuredAnswerGenerator:
                 target = entity_by_id.get(edge.target_id)
                 if source is None or target is None:
                     continue
-                relation = ATTRIBUTE_TITLES.get(edge.relation, edge.relation)
+                relation = slot_spec(edge.relation).title
                 graph_label = "条件依赖" if edge.graph_type == "conditional" else "语义依赖"
                 lines.append(f"- {source.canonical_name} -> {target.canonical_name}：{graph_label} / {relation}")
         if graph.cycles:

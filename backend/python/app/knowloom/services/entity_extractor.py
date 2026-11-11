@@ -3,7 +3,7 @@ import asyncio
 from pydantic import ValidationError
 
 from app.knowloom.config import KnowLoomSettings, settings
-from app.knowloom.constants import ATTRIBUTE_TYPES
+from app.knowloom.constants import DEFAULT_ENTITY_TYPE, ENTITY_TYPES, FALLBACK_SLOT, SLOTS, SLOT_SPECS, slots_for
 from app.knowloom.llm import KnowLoomLLMClient
 from app.knowloom.models import BlockEntityExtraction, BlockExtractionFailure, BlockExtractionResult, EntityAdmissionJudgeScore, ExtractedEntity, TextBlock
 from app.knowloom.prompts import ENTITY_EXTRACTION_SYSTEM_PROMPT
@@ -24,11 +24,11 @@ ENTITY_ADMISSION_JUDGE_SYSTEM_PROMPT = """
 实体定义：
 - 实体是可以长期累积知识、被多篇文本新增/补充/修正/冲突的稳定知识对象。
 - 标题、名词、操作动作、机制小节、条件项或步骤本身不自动等于实体。
-- 如果候选更适合挂到 parent/root entity 的 mechanism、constraints、components 或 related 中，不要判为 entity。
+- 如果候选更适合挂到 parent/root entity 的 procedure、conditions、materials、notes 或 related 中，不要判为 entity。
 
 正向评分，每项 0.0-1.0：
 - identity_boundary：是否有稳定身份边界，能和父概念、步骤、属性区分。
-- knowledge_capacity：是否能承载 definition/purpose/mechanism/constraints/related 等多类知识。
+- knowledge_capacity：是否能承载 definition/purpose/procedure/conditions/related 等多类知识。
 - query_entry_value：用户是否自然会以它为查询入口。
 - evolution_stability：未来多文本输入时，它是否值得作为长期合并对象。
 
@@ -64,7 +64,7 @@ JSON 格式：
     "evidence_weak_penalty": 0.0
   },
   "parent_entity": "如果应归属到父实体，填写父实体",
-  "attribute_type": "definition | purpose | core_idea | mechanism | components | constraints | related | ",
+  "attribute_type": "应归属的模板槽位键；由请求中的 slot_schema 决定",
   "reason": "一句话说明判断依据"
 }
 """.strip()
@@ -128,7 +128,12 @@ class EntityExtractor:
                 "block": block.model_dump(),
                 "anchor_entity": block.anchor_entity,
                 "candidate_entities": block.candidate_entities,
-                "attribute_schema": list(ATTRIBUTE_TYPES),
+                "slot_schema": [
+                    {"key": spec.key, "title": spec.title, "hint": spec.hint}
+                    for spec in SLOT_SPECS
+                ],
+                "entity_slot_templates": {entity_type: list(slots_for(entity_type)) for entity_type in ENTITY_TYPES},
+                "entity_types": list(ENTITY_TYPES),
                 "entity_admission_threshold": ENTITY_ADMISSION_THRESHOLD,
                 "entity_admission_dimensions": ENTITY_ADMISSION_DIMENSIONS,
             },
@@ -143,6 +148,7 @@ class EntityExtractor:
         accepted_entities: list[ExtractedEntity] = []
         warnings = list(result.warnings)
         for entity in result.entities:
+            warnings.extend(normalize_entity_slots(entity))
             score = entity.admission_score.aggregate_score
             if score < ENTITY_ADMISSION_THRESHOLD:
                 warnings.append(
@@ -184,3 +190,24 @@ class EntityExtractor:
             model=self.config.entity_admission_judge_model,
         )
         return EntityAdmissionJudgeScore.model_validate(data)
+
+
+def normalize_entity_slots(entity: ExtractedEntity) -> list[str]:
+    warnings: list[str] = []
+    entity_type = str(entity.entity_type or "").strip()
+    if entity_type not in ENTITY_TYPES:
+        warnings.append(f"entity type {entity_type or '<empty>'} not in slot registry; using {DEFAULT_ENTITY_TYPE}")
+        entity.entity_type = DEFAULT_ENTITY_TYPE
+    allowed = set(slots_for(entity.entity_type))
+    for attribute in entity.attributes.root:
+        original_slot = attribute.slot
+        if original_slot not in SLOTS:
+            warnings.append(f"unknown slot {original_slot or '<empty>'} downgraded to {FALLBACK_SLOT}")
+            attribute.slot = FALLBACK_SLOT
+        elif original_slot not in allowed:
+            warnings.append(f"slot {original_slot} not allowed for {entity.entity_type}; downgraded to {FALLBACK_SLOT}")
+            attribute.slot = FALLBACK_SLOT
+        if attribute.slot == FALLBACK_SLOT and len(attribute.value) > 200:
+            attribute.value = attribute.value[:200].rstrip()
+            warnings.append(f"{FALLBACK_SLOT} value truncated to 200 characters")
+    return warnings

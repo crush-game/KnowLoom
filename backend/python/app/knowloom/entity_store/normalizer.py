@@ -2,6 +2,7 @@ import hashlib
 import re
 from collections import OrderedDict
 
+from app.knowloom.constants import SLOTS
 from app.knowloom.models import BlockEntityExtraction, ExtractedEntity
 from app.knowloom.entity_store.models import EntityAttributeInput, EntityScope, IncomingEntity
 
@@ -119,7 +120,9 @@ def build_description_for_match(entity: IncomingEntity) -> str:
         parts.append(f"aliases: {', '.join(entity.aliases[:8])}")
     if entity.identity_description:
         parts.append(f"identity: {entity.identity_description}")
-    for attr_type in ("definition", "purpose", "core_idea", "mechanism", "components", "constraints", "related"):
+    for attr_type, spec in SLOTS.items():
+        if spec.merge_policy != "fact":
+            continue
         values = [item.value_text for item in entity.attributes if item.attr_type == attr_type]
         if values:
             parts.append(f"{attr_type}: {'; '.join(values[:5])}")

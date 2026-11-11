@@ -22,7 +22,7 @@ def preprocess_result() -> KnowLoomPreprocessResult:
         name="Transformer",
         entity_type="concept",
         identity_description="A neural network architecture.",
-        attributes=AttributeBucket(definition=[AttributeValue(value="Transformer architecture", evidence="Transformer uses attention.")]),
+        attributes=AttributeBucket([AttributeValue(slot="definition", value="Transformer architecture", evidence="Transformer uses attention.")]),
     )
     return KnowLoomPreprocessResult(
         input_text="Transformer uses attention.",

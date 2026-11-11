@@ -124,7 +124,7 @@ async def seed_ambiguous_block_entities(
                     confidence=0.9,
                 ),
                 EntityAttributeInput(
-                    attr_type="components",
+                    attr_type="related",
                     value_text="通常包含文本、样式、排序位置和父子层级等 UI 状态。",
                     evidence="页面内容块表示可编辑和拖拽的结构化 UI 单元。",
                     confidence=0.8,

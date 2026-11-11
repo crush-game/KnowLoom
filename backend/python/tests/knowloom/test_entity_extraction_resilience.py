@@ -52,7 +52,7 @@ class ExtractionLLM:
             "entities": [
                 {
                     "name": "Redlock",
-                    "entity_type": "concept",
+                    "entity_type": "procedure",
                     "identity_description": "Redis distributed lock algorithm.",
                     "admission_score": {
                         "definable": 0.9,

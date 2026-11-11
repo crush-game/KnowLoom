@@ -1,24 +1,15 @@
-from typing import Literal
+from typing import Any, Literal
 
-from typing import Any
+from pydantic import BaseModel, Field, RootModel, field_validator, model_validator
 
-from pydantic import BaseModel, Field, field_validator, model_validator
-
-from app.knowloom.constants import ATTRIBUTE_TYPES
+from app.knowloom.constants import ATTRIBUTE_TYPES, FALLBACK_SLOT, SLOTS
 
 
-AttributeType = Literal[
-    "definition",
-    "purpose",
-    "core_idea",
-    "mechanism",
-    "components",
-    "constraints",
-    "related",
-]
+AttributeType = str
 
 
 class AttributeValue(BaseModel):
+    slot: str = ""
     value: str = Field(default="", description="Attribute value extracted from the block.")
     evidence: str = Field(default="", description="Evidence copied from the block text.")
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
@@ -30,27 +21,52 @@ class AttributeValue(BaseModel):
             data = {**data, "evidence": data.get("source_text", "")}
         return data
 
+    @field_validator("slot", mode="before")
+    @classmethod
+    def clean_slot(cls, value: str) -> str:
+        return "_".join(str(value or "").strip().lower().split())
+
     @field_validator("value", "evidence")
     @classmethod
     def clean_text(cls, value: str) -> str:
         return " ".join(str(value or "").split())
 
 
-class AttributeBucket(BaseModel):
-    definition: list[AttributeValue] = Field(default_factory=list)
-    purpose: list[AttributeValue] = Field(default_factory=list)
-    core_idea: list[AttributeValue] = Field(default_factory=list)
-    mechanism: list[AttributeValue] = Field(default_factory=list)
-    components: list[AttributeValue] = Field(default_factory=list)
-    constraints: list[AttributeValue] = Field(default_factory=list)
-    related: list[AttributeValue] = Field(default_factory=list)
+class AttributeBucket(RootModel[list[AttributeValue]]):
+    root: list[AttributeValue] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_bucket(cls, data: Any) -> Any:
+        if isinstance(data, list):
+            return data
+        if not isinstance(data, dict):
+            return []
+        if "root" in data:
+            return data["root"]
+        if "items" in data:
+            return data["items"]
+        legacy_mapping = {
+            "definition": "definition",
+            "purpose": "purpose",
+            "constraints": "conditions",
+            "related": "related",
+            "core_idea": FALLBACK_SLOT,
+            "mechanism": FALLBACK_SLOT,
+            "components": FALLBACK_SLOT,
+        }
+        values: list[dict[str, Any]] = []
+        for key, raw_values in data.items():
+            slot = legacy_mapping.get(key, FALLBACK_SLOT)
+            for raw_value in raw_values if isinstance(raw_values, list) else []:
+                if isinstance(raw_value, dict):
+                    values.append({"slot": slot, **raw_value})
+        return values
 
     def iter_values(self) -> list[tuple[AttributeType, AttributeValue]]:
-        items: list[tuple[AttributeType, AttributeValue]] = []
-        for attr_type in ATTRIBUTE_TYPES:
-            values = getattr(self, attr_type)
-            items.extend((attr_type, value) for value in values)
-        return items
+        return [(item.slot or FALLBACK_SLOT, item) for item in self.root]
+
+
 
 
 class EntityAdmissionScore(BaseModel):
@@ -231,10 +247,16 @@ class StoredAttributeEvidence(BaseModel):
 
 class StoredAttribute(BaseModel):
     id: int = 0
-    attr_type: AttributeType
+    attr_type: str
     value_text: str
     confidence: float = Field(default=0.7, ge=0.0, le=1.0)
     evidence: list[StoredAttributeEvidence] = Field(default_factory=list)
+
+    @field_validator("attr_type", mode="before")
+    @classmethod
+    def normalize_stored_slot(cls, value: str) -> str:
+        key = str(value or "").strip()
+        return key if key in SLOTS else FALLBACK_SLOT
 
 
 class RetrievedEntity(BaseModel):
@@ -251,7 +273,7 @@ class RetrievedEntity(BaseModel):
     source: str = ""
     attributes: list[StoredAttribute] = Field(default_factory=list)
 
-    def attributes_by_type(self, attr_type: AttributeType) -> list[StoredAttribute]:
+    def attributes_by_type(self, attr_type: str) -> list[StoredAttribute]:
         return [attribute for attribute in self.attributes if attribute.attr_type == attr_type]
 
 

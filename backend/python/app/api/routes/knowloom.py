@@ -4,6 +4,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.knowloom.constants import attribute_schema_payload
 from app.knowloom.entity_store.ingestor import EntityIngestor
 from app.knowloom.entity_store.models import DocumentMetadata, EntityScope
 from app.knowloom.entity_store.repository import MySQLEntityRepository
@@ -89,6 +90,11 @@ class KnowLoomReviewActionRequest(BaseModel):
 
 class KnowLoomReviewRejectRequest(KnowLoomReviewActionRequest):
     candidate_entity_ids: list[int] = Field(default_factory=list)
+
+
+@router.get("/attribute-schema")
+async def get_attribute_schema() -> dict[str, object]:
+    return attribute_schema_payload()
 
 
 @router.post("/extract", response_model=KnowLoomPreprocessResult)

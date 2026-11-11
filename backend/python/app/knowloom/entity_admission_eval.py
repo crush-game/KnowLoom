@@ -62,7 +62,7 @@ JSON 格式：
     {
       "predicted_entity": "预测属性所属实体",
       "predicted_attribute": "预测属性文本",
-      "bucket": "definition | purpose | core_idea | mechanism | components | constraints | related",
+      "bucket": "definition | applicable_to | conditions | procedure | deadline | materials | notes",
       "status": "matched | unmatched | contradictory",
       "bucket_correct": true,
       "matched_gold_attribute": "匹配到的 gold 属性，未匹配则空",

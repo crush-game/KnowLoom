@@ -1159,7 +1159,7 @@ def description_for_seed(seed: dict[str, Any]) -> str:
     if seed.get("identity_description"):
         parts.append(f"identity: {seed['identity_description']}")
     attributes = seed.get("attributes") or {}
-    for attr_type in ("definition", "purpose", "core_idea", "mechanism", "components", "constraints", "related"):
+    for attr_type in ("definition", "purpose", "applicable_to", "conditions", "procedure", "authority", "related", "notes"):
         values = attributes.get(attr_type) or []
         if values:
             parts.append(f"{attr_type}: {'; '.join(str(value) for value in values)}")

@@ -57,21 +57,21 @@ def candidate(attribute_id: int, attr_type: str, value: str, *, rank: int = 1) -
 def test_attribute_decider_maps_retrieval_results_to_conservative_actions() -> None:
     decider = AttributeDecisionMaker()
     attrs = [
-        incoming("mechanism", "使用 SET NX EX 命令获取锁"),
-        incoming("limitation", "如果业务执行时间超过锁 TTL，锁会提前释放，其他客户端可能获取同一资源的锁"),
-        incoming("limitation", "单节点 Redis 分布式锁在主从切换时不会产生安全问题"),
-            incoming("advantage", "实现成本低"),
+        incoming("procedure", "使用 SET NX EX 命令获取锁"),
+        incoming("conditions", "如果业务执行时间超过锁 TTL，锁会提前释放，其他客户端可能获取同一资源的锁"),
+        incoming("conditions", "单节点 Redis 分布式锁在主从切换时不会产生安全问题"),
+            incoming("notes", "实现成本低"),
             incoming("purpose", "减少读写阻塞"),
     ]
-    exact = stored(10, "mechanism", "使用 SET NX EX 命令获取锁")
+    exact = stored(10, "procedure", "使用 SET NX EX 命令获取锁")
 
     decisions = decider.decide(
         attrs,
         [
-            result(0, "mechanism", attrs[0].value_text, exact=exact),
-            result(1, "limitation", attrs[1].value_text, candidate(20, "limitation", "Redis 分布式锁可能出现锁过期问题")),
-            result(2, "limitation", attrs[2].value_text, candidate(30, "limitation", "单节点 Redis 分布式锁在主从切换时可能出现安全问题")),
-            result(3, "advantage", attrs[3].value_text),
+            result(0, "procedure", attrs[0].value_text, exact=exact),
+            result(1, "conditions", attrs[1].value_text, candidate(20, "conditions", "Redis 分布式锁可能出现锁过期问题")),
+            result(2, "conditions", attrs[2].value_text, candidate(30, "conditions", "单节点 Redis 分布式锁在主从切换时可能出现安全问题")),
+            result(3, "notes", attrs[3].value_text),
             result(4, "purpose", attrs[4].value_text, candidate(40, "purpose", "提高并发读性能")),
         ],
     )

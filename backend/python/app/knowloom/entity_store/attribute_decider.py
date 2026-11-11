@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.knowloom.constants import slot_spec
 from app.knowloom.entity_store.models import (
     AttributeCandidate,
     AttributeDecision,
@@ -44,6 +45,30 @@ class AttributeDecisionMaker:
         decisions: list[AttributeDecision] = []
         for input_index, attribute in enumerate(incoming_attributes):
             result = results_by_index.get(input_index)
+            if slot_spec(attribute.attr_type).merge_policy == "append":
+                if result is not None and result.exact_match is not None:
+                    decisions.append(
+                        AttributeDecision(
+                            input_index=input_index,
+                            action="merge",
+                            incoming_attribute=attribute,
+                            target_attribute_id=result.exact_match.id,
+                            target_value_text=result.exact_match.value_text,
+                            confidence=1.0,
+                            reason="exact fingerprint match for append slot",
+                        )
+                    )
+                else:
+                    decisions.append(
+                        AttributeDecision(
+                            input_index=input_index,
+                            action="add",
+                            incoming_attribute=attribute,
+                            confidence=attribute.confidence,
+                            reason="append slot keeps distinct values without adjudication",
+                        )
+                    )
+                continue
             if result is None or not result.candidates and result.exact_match is None:
                 decisions.append(
                     AttributeDecision(

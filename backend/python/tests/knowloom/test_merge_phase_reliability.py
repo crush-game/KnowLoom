@@ -188,14 +188,13 @@ def preprocess_result() -> KnowLoomPreprocessResult:
                         name="MVCC",
                         entity_type="concept",
                         identity_description="数据库多版本并发控制机制。",
-                        attributes=AttributeBucket(
-                            mechanism=[
-                                AttributeValue(
-                                    value="通过多版本减少读写阻塞",
-                                    evidence="MVCC 通过多版本减少读写阻塞。",
-                                )
-                            ]
-                        ),
+                        attributes=AttributeBucket([
+                            AttributeValue(
+                                slot="notes",
+                                value="通过多版本减少读写阻塞",
+                                evidence="MVCC 通过多版本减少读写阻塞。",
+                            )
+                        ]),
                     )
                 ],
             )

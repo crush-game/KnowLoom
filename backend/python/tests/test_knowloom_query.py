@@ -24,8 +24,8 @@ def test_dependency_graph_extracts_semantic_and_conditional_edges() -> None:
         1,
         "Transformer",
         [
-            attribute("mechanism", "Transformer uses Attention to model token relations."),
-            attribute("constraints", "Transformer depends on positional encoding when sequence order matters."),
+            attribute("procedure", "Transformer uses Attention to model token relations."),
+            attribute("conditions", "Transformer depends on positional encoding when sequence order matters."),
         ],
     )
     attention = entity(2, "Attention", [attribute("related", "Attention is part of Transformer.")])

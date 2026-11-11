@@ -1,10 +1,7 @@
 from collections import defaultdict, deque
 
+from app.knowloom.constants import slot_spec
 from app.knowloom.models import DependencyEdge, DependencyGraph, RetrievedEntity, StoredAttribute
-
-
-SEMANTIC_ATTRIBUTE_TYPES = {"definition", "purpose", "core_idea", "mechanism", "components", "related"}
-CONDITIONAL_ATTRIBUTE_TYPES = {"constraints"}
 
 
 def build_dependency_graph(
@@ -74,11 +71,8 @@ def build_dependency_graph(
 
 
 def graph_type_for_attribute(attribute: StoredAttribute) -> str | None:
-    if attribute.attr_type in CONDITIONAL_ATTRIBUTE_TYPES:
-        return "conditional"
-    if attribute.attr_type in SEMANTIC_ATTRIBUTE_TYPES:
-        return "semantic"
-    return None
+    graph = slot_spec(attribute.attr_type).graph
+    return graph if graph in {"semantic", "conditional"} else None
 
 
 def mentioned_entities(text: str, entities: list[RetrievedEntity], *, source_entity_id: int) -> list[RetrievedEntity]:
