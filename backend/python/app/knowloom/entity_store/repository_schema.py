@@ -24,6 +24,7 @@ def ensure_entity_table_columns(cursor: Any) -> None:
     ensure_index(cursor, "knowloom_entities", "idx_knowloom_entities_scope_name", "workspace_id, project_id, collection_id, domain, normalized_name")
     ensure_resolution_audit_scope_columns(cursor)
     ensure_ingest_job_columns(cursor)
+    ensure_document_layer_schema(cursor)
     ensure_incoming_entity_columns(cursor)
     ensure_review_table_indexes(cursor)
     ensure_attribute_decision_tables(cursor)
@@ -52,11 +53,29 @@ def ensure_ingest_job_columns(cursor: Any) -> None:
     existing_columns = {str(row["Field"]) for row in cursor.fetchall()}
     columns = {
         "source_note_id": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN source_note_id VARCHAR(128) NOT NULL DEFAULT '' AFTER domain",
-        "task_name": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN task_name VARCHAR(255) NOT NULL DEFAULT '' AFTER source_note_id",
+        "document_id": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN document_id BIGINT NULL AFTER source_note_id",
+        "task_name": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN task_name VARCHAR(255) NOT NULL DEFAULT '' AFTER document_id",
     }
     for column, statement in columns.items():
         if column not in existing_columns:
             cursor.execute(statement)
+
+
+
+def ensure_document_layer_schema(cursor: Any) -> None:
+    """Backfill the D-002 document-layer columns for databases created before this release."""
+    cursor.execute("SHOW TABLES LIKE 'knowloom_entity_attribute_evidence'")
+    if cursor.fetchone():
+        cursor.execute("SHOW COLUMNS FROM knowloom_entity_attribute_evidence")
+        columns = {str(row["Field"]) for row in cursor.fetchall()}
+        additions = {
+            "document_id": "ALTER TABLE knowloom_entity_attribute_evidence ADD COLUMN document_id BIGINT NULL AFTER attribute_id",
+            "block_ref_id": "ALTER TABLE knowloom_entity_attribute_evidence ADD COLUMN block_ref_id BIGINT NULL AFTER document_id",
+        }
+        for name, statement in additions.items():
+            if name not in columns:
+                cursor.execute(statement)
+        ensure_index(cursor, "knowloom_entity_attribute_evidence", "idx_knowloom_evidence_block_ref", "block_ref_id")
 
 
 def ensure_index(cursor: Any, table_name: str, index_name: str, columns_sql: str) -> None:

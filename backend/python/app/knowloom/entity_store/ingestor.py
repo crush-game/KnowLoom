@@ -5,7 +5,7 @@ from typing import Any
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.entity_store.attribute_decider import AttributeDecisionMaker
 from app.knowloom.entity_store.attribute_retriever import AttributeCandidateRetriever
-from app.knowloom.entity_store.models import EntityIngestQueueResult, EntityResolutionDecision, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask
+from app.knowloom.entity_store.models import DocumentMetadata, EntityIngestQueueResult, EntityResolutionDecision, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask
 from app.knowloom.entity_store.normalizer import dedupe_extracted_entities, merge_unique, normalize_name
 from app.knowloom.entity_store.relation_memory import EntityRelationMemory
 from app.knowloom.entity_store.repository import MySQLEntityRepository
@@ -62,6 +62,7 @@ class EntityIngestor:
         *,
         source_note_id: str = "",
         task_name: str = "",
+        document_metadata: DocumentMetadata | None = None,
     ) -> EntityIngestQueueResult:
         incoming_entities = dedupe_extracted_entities(result.blocks, scope=self.scope, source_note_id=source_note_id)
         source_blocks_by_key = source_blocks_for_incoming(result, incoming_entities)
@@ -74,6 +75,7 @@ class EntityIngestor:
             source_blocks_by_key=source_blocks_by_key,
             source_note_id=source_note_id,
             task_name=task_name,
+            document_metadata=document_metadata,
         )
         return queue_result
 

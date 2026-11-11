@@ -62,6 +62,8 @@ def row_to_incoming_task(row: dict[str, Any]) -> IncomingEntityTask:
             note_id=str(item.get("note_id") or ""),
             block_id=str(item.get("block_id") or ""),
             block_index=int(item.get("block_index") if item.get("block_index") is not None else -1),
+            document_id=int(item["document_id"]) if item.get("document_id") is not None else None,
+            block_ref_id=int(item["block_ref_id"]) if item.get("block_ref_id") is not None else None,
         )
         for item in json.loads(row.get("attributes_json") or "[]")
         if isinstance(item, dict)
@@ -194,6 +196,16 @@ def group_attribute_rows(rows: list[dict[str, Any]]) -> dict[int, list[StoredAtt
                     note_id=str(row.get("note_id") or ""),
                     block_id=str(row.get("block_id") or ""),
                     block_index=int(row.get("block_index") if row.get("block_index") is not None else -1),
+                    block_ref_id=int(row["block_ref_id"]) if row.get("block_ref_id") is not None else None,
+                    document_id=int(row["document_id"]) if row.get("document_id") is not None else None,
+                    document_title=str(row.get("document_title") or ""),
+                    document_version=int(row.get("document_version") or 0),
+                    doc_number=str(row.get("doc_number") or ""),
+                    doc_kind=str(row.get("doc_kind") or ""),
+                    issuer=str(row.get("issuer") or ""),
+                    issuer_level=str(row.get("issuer_level") or ""),
+                    effective_at=str(row.get("effective_at") or ""),
+                    source_url=str(row.get("source_url") or ""),
                 )
             )
     return {entity_id: list(attributes.values()) for entity_id, attributes in grouped.items()}

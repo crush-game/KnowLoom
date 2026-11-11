@@ -256,9 +256,20 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 e.evidence_text,
                 e.note_id,
                 e.block_id,
-                e.block_index
+                e.block_index,
+                e.block_ref_id,
+                e.document_id,
+                d.title AS document_title,
+                d.version_no AS document_version,
+                d.doc_number,
+                d.doc_kind,
+                d.issuer,
+                d.issuer_level,
+                d.effective_at,
+                d.source_url
             FROM knowloom_entity_attributes a
             LEFT JOIN knowloom_entity_attribute_evidence e ON e.attribute_id = a.id
+            LEFT JOIN knowloom_documents d ON d.id = e.document_id
             WHERE a.entity_id IN ({placeholders}) AND a.status = 'active'
             ORDER BY a.entity_id, a.attr_type, a.id, e.id
         """
@@ -287,9 +298,20 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 e.evidence_text,
                 e.note_id,
                 e.block_id,
-                e.block_index
+                e.block_index,
+                e.block_ref_id,
+                e.document_id,
+                d.title AS document_title,
+                d.version_no AS document_version,
+                d.doc_number,
+                d.doc_kind,
+                d.issuer,
+                d.issuer_level,
+                d.effective_at,
+                d.source_url
             FROM knowloom_entity_attributes a
             LEFT JOIN knowloom_entity_attribute_evidence e ON e.attribute_id = a.id
+            LEFT JOIN knowloom_documents d ON d.id = e.document_id
             WHERE a.entity_id IN ({placeholders}) AND a.status = 'active'
             ORDER BY a.entity_id, a.attr_type, a.id, e.id
         """

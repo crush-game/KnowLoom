@@ -190,14 +190,16 @@ class AttributeDecisionRepositoryMixin:
         cursor.execute(
             """
             INSERT INTO knowloom_entity_attribute_evidence (
-                attribute_id, note_id, block_id, block_index, evidence_text, evidence_fingerprint
+                attribute_id, document_id, block_ref_id, note_id, block_id, block_index, evidence_text, evidence_fingerprint
             )
-            VALUES (%s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 evidence_text = VALUES(evidence_text)
             """,
             (
                 int(attribute_id),
+                attribute.document_id,
+                attribute.block_ref_id,
                 attribute.note_id,
                 attribute.block_id,
                 attribute.block_index,
@@ -279,6 +281,8 @@ class AttributeDecisionRepositoryMixin:
             "note_id": attribute.note_id,
             "block_id": attribute.block_id,
             "block_index": attribute.block_index,
+            "document_id": attribute.document_id,
+            "block_ref_id": attribute.block_ref_id,
         }
         candidate_snapshot = None
         if decision.target_attribute_id:

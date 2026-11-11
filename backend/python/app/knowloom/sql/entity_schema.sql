@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_attributes (
 CREATE TABLE IF NOT EXISTS knowloom_entity_attribute_evidence (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     attribute_id BIGINT NOT NULL,
+    document_id BIGINT NULL,
+    block_ref_id BIGINT NULL,
     note_id VARCHAR(128) NOT NULL DEFAULT '',
     block_id VARCHAR(128) NOT NULL DEFAULT '',
     block_index INT NOT NULL DEFAULT -1,
@@ -52,6 +54,7 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_attribute_evidence (
     UNIQUE KEY uk_knowloom_attr_evidence_fingerprint (attribute_id, evidence_fingerprint),
     INDEX idx_knowloom_entity_evidence_attribute (attribute_id),
     INDEX idx_knowloom_entity_evidence_block (note_id, block_id),
+    INDEX idx_knowloom_evidence_block_ref (block_ref_id),
     CONSTRAINT fk_knowloom_entity_evidence_attribute
         FOREIGN KEY (attribute_id) REFERENCES knowloom_entity_attributes(id)
         ON DELETE CASCADE
@@ -105,6 +108,49 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_aliases (
         ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS knowloom_documents (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    workspace_id VARCHAR(128) NOT NULL DEFAULT 'local',
+    project_id VARCHAR(128) NOT NULL DEFAULT 'knowloom',
+    collection_id VARCHAR(128) NOT NULL DEFAULT 'default',
+    domain VARCHAR(128) NOT NULL DEFAULT 'general',
+    scope_hash CHAR(64) NOT NULL,
+    doc_key VARCHAR(128) NOT NULL,
+    version_no INT NOT NULL DEFAULT 1,
+    title VARCHAR(255) NOT NULL DEFAULT '',
+    doc_number VARCHAR(64) NOT NULL DEFAULT '',
+    doc_kind VARCHAR(32) NOT NULL DEFAULT 'regulation',
+    issuer VARCHAR(128) NOT NULL DEFAULT '',
+    issuer_level VARCHAR(16) NOT NULL DEFAULT 'university',
+    audience VARCHAR(128) NOT NULL DEFAULT '',
+    source_url VARCHAR(1024) NOT NULL DEFAULT '',
+    published_at DATE NULL,
+    effective_at DATE NULL,
+    content_text MEDIUMTEXT NOT NULL,
+    content_fingerprint CHAR(64) NOT NULL,
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_knowloom_doc_version (scope_hash, doc_key, version_no),
+    INDEX idx_knowloom_doc_key_status (scope_hash, doc_key, status)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS knowloom_blocks (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    document_id BIGINT NOT NULL,
+    block_index INT NOT NULL,
+    heading VARCHAR(255) NOT NULL DEFAULT '',
+    anchor_entity VARCHAR(255) NOT NULL DEFAULT '',
+    l1_text MEDIUMTEXT NOT NULL,
+    split_reason VARCHAR(32) NOT NULL DEFAULT '',
+    parent_block_index INT NULL,
+    chunk_index INT NOT NULL DEFAULT 0,
+    chunk_count INT NOT NULL DEFAULT 1,
+    text_fingerprint CHAR(64) NOT NULL,
+    UNIQUE KEY uk_knowloom_block (document_id, block_index),
+    CONSTRAINT fk_knowloom_block_document
+        FOREIGN KEY (document_id) REFERENCES knowloom_documents(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS knowloom_ingest_jobs (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     workspace_id VARCHAR(128) NOT NULL DEFAULT 'local',
@@ -112,6 +158,7 @@ CREATE TABLE IF NOT EXISTS knowloom_ingest_jobs (
     collection_id VARCHAR(128) NOT NULL DEFAULT 'default',
     domain VARCHAR(128) NOT NULL DEFAULT 'general',
     source_note_id VARCHAR(128) NOT NULL DEFAULT '',
+    document_id BIGINT NULL,
     task_name VARCHAR(255) NOT NULL DEFAULT '',
     input_fingerprint CHAR(64) NOT NULL,
     input_text MEDIUMTEXT NOT NULL,

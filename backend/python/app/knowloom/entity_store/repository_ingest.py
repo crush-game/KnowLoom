@@ -2,7 +2,8 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from app.knowloom.entity_store.models import EntityIngestQueueResult, EntityScope, IncomingEntity
+from app.knowloom.entity_store.alias_cache import scope_hash
+from app.knowloom.entity_store.models import DocumentMetadata, EntityIngestQueueResult, EntityScope, IncomingEntity
 from app.knowloom.entity_store.normalizer import normalize_name, text_fingerprint
 from app.knowloom.entity_store.repository_helpers import incoming_entity_key
 from app.knowloom.entity_store.repository_mappers import (
@@ -21,47 +22,187 @@ class IngestJobRepositoryMixin:
         preprocess: KnowLoomPreprocessResult,
         scope: EntityScope,
         incoming_entities: list[IncomingEntity],
-        source_blocks_by_key: dict[str, list[dict[str, Any]]],
+        source_blocks_by_key: dict[str, list[dict[str, Any]],],
         source_note_id: str = "",
         task_name: str = "",
+        document_metadata: DocumentMetadata | None = None,
     ) -> EntityIngestQueueResult:
+        metadata = document_metadata or DocumentMetadata(doc_key=str(source_note_id or text_fingerprint(input_text)))
+        if not metadata.doc_key:
+            metadata.doc_key = text_fingerprint(input_text)
         with self.connect() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO knowloom_ingest_jobs (
-                        workspace_id, project_id, collection_id, domain,
-                        source_note_id, task_name,
-                        input_fingerprint, input_text, preprocess_json,
-                        block_count, entity_count, queued_count, status
+            try:
+                with connection.cursor() as cursor:
+                    document_id = self._insert_document(cursor, scope, metadata, input_text)
+                    block_ids = self._insert_blocks(cursor, document_id, preprocess)
+                    self._attach_document_references(incoming_entities, document_id, block_ids)
+                    self._attach_document_references_to_source_blocks(source_blocks_by_key, document_id, block_ids)
+                    cursor.execute(
+                        """
+                        INSERT INTO knowloom_ingest_jobs (
+                            workspace_id, project_id, collection_id, domain,
+                            source_note_id, document_id, task_name,
+                            input_fingerprint, input_text, preprocess_json,
+                            block_count, entity_count, queued_count, status
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
+                        """,
+                        (
+                            scope.workspace_id, scope.project_id, scope.collection_id, scope.domain,
+                            str(source_note_id or ""), document_id, str(task_name or "")[:255],
+                            text_fingerprint(input_text), input_text, preprocess.model_dump_json(),
+                            len(preprocess.blocks), preprocess.entity_count, len(incoming_entities),
+                        ),
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'queued')
-                    """,
-                    (
-                        scope.workspace_id,
-                        scope.project_id,
-                        scope.collection_id,
-                        scope.domain,
-                        str(source_note_id or ""),
-                        str(task_name or "")[:255],
-                        text_fingerprint(input_text),
-                        input_text,
-                        preprocess.model_dump_json(),
-                        len(preprocess.blocks),
-                        preprocess.entity_count,
-                        len(incoming_entities),
-                    ),
-                )
-                job_id = int(cursor.lastrowid)
-                incoming_ids = self._insert_incoming_entities(cursor, job_id, incoming_entities, source_blocks_by_key)
-                self._insert_extraction_failures(cursor, job_id, scope, source_note_id, preprocess.extraction_failures)
-            connection.commit()
+                    job_id = int(cursor.lastrowid)
+                    incoming_ids = self._insert_incoming_entities(cursor, job_id, incoming_entities, source_blocks_by_key)
+                    self._insert_extraction_failures(cursor, job_id, scope, source_note_id, preprocess.extraction_failures)
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
         return EntityIngestQueueResult(
             job_id=job_id,
             status="queued",
             queued_count=len(incoming_ids),
             incoming_entity_ids=incoming_ids,
+            document_id=document_id,
         )
+
+    def find_duplicate_document(self, *, scope: EntityScope, doc_key: str, content_fingerprint: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, doc_key, version_no, title, status
+                    FROM knowloom_documents
+                    WHERE scope_hash = %s AND doc_key = %s AND status = 'active'
+                      AND content_fingerprint = %s
+                    LIMIT 1
+                    """,
+                    (scope_hash(scope), str(doc_key or ""), content_fingerprint),
+                )
+                return cursor.fetchone()
+
+    def get_block_with_context(self, block_id: int, *, context: bool = True) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT b.id, b.document_id, b.block_index, b.heading, b.anchor_entity, b.l1_text,
+                           b.split_reason, b.parent_block_index, b.chunk_index, b.chunk_count,
+                           d.doc_key, d.version_no, d.title, d.status
+                    FROM knowloom_blocks b
+                    INNER JOIN knowloom_documents d ON d.id = b.document_id
+                    WHERE b.id = %s
+                    LIMIT 1
+                    """,
+                    (int(block_id),),
+                )
+                block = cursor.fetchone()
+                if not block:
+                    return None
+                if context:
+                    cursor.execute(
+                        """
+                        SELECT id, document_id, block_index, heading, anchor_entity, l1_text,
+                               split_reason, parent_block_index, chunk_index, chunk_count
+                        FROM knowloom_blocks
+                        WHERE document_id = %s AND block_index BETWEEN %s AND %s
+                        ORDER BY block_index, chunk_index
+                        """,
+                        (int(block["document_id"]), int(block["block_index"]) - 1, int(block["block_index"]) + 1),
+                    )
+                    block["context_blocks"] = cursor.fetchall()
+                return block
+
+    def list_document_versions(self, *, scope: EntityScope, doc_key: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, doc_key, version_no, title, doc_number, doc_kind, issuer,
+                           issuer_level, audience, source_url, published_at, effective_at,
+                           status, created_at
+                    FROM knowloom_documents
+                    WHERE scope_hash = %s AND doc_key = %s
+                    ORDER BY version_no DESC
+                    """,
+                    (scope_hash(scope), str(doc_key or "")),
+                )
+                return cursor.fetchall()
+
+    def _insert_document(self, cursor: Any, scope: EntityScope, metadata: DocumentMetadata, input_text: str) -> int:
+        key = str(metadata.doc_key or text_fingerprint(input_text))[:128]
+        fingerprint = text_fingerprint(input_text)
+        cursor.execute(
+            """
+            SELECT id, version_no
+            FROM knowloom_documents
+            WHERE scope_hash = %s AND doc_key = %s AND status = 'active'
+            ORDER BY version_no DESC
+            LIMIT 1
+            FOR UPDATE
+            """,
+            (scope_hash(scope), key),
+        )
+        current = cursor.fetchone()
+        version_no = int(current["version_no"]) + 1 if current else 1
+        if current:
+            cursor.execute("UPDATE knowloom_documents SET status = 'superseded' WHERE id = %s", (int(current["id"]),))
+        cursor.execute(
+            """
+            INSERT INTO knowloom_documents (
+                workspace_id, project_id, collection_id, domain, scope_hash, doc_key, version_no,
+                title, doc_number, doc_kind, issuer, issuer_level, audience, source_url,
+                published_at, effective_at, content_text, content_fingerprint, status
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, 'active')
+            """,
+            (
+                scope.workspace_id, scope.project_id, scope.collection_id, scope.domain,
+                scope_hash(scope), key, version_no, metadata.title[:255], metadata.doc_number[:64],
+                metadata.doc_kind[:32] or 'regulation', metadata.issuer[:128],
+                metadata.issuer_level[:16] or 'university', metadata.audience[:128], metadata.source_url[:1024],
+                metadata.published_at, metadata.effective_at, input_text, fingerprint,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def _insert_blocks(self, cursor: Any, document_id: int, preprocess: KnowLoomPreprocessResult) -> dict[int, int]:
+        block_ids: dict[int, int] = {}
+        for extraction in preprocess.blocks:
+            block = extraction.block
+            cursor.execute(
+                """
+                INSERT INTO knowloom_blocks (
+                    document_id, block_index, heading, anchor_entity, l1_text, split_reason,
+                    parent_block_index, chunk_index, chunk_count, text_fingerprint
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    int(document_id), int(block.block_index), block.heading[:255], block.anchor_entity[:255],
+                    block.l1_text, block.split_reason[:32], block.parent_block_index,
+                    int(block.chunk_index), int(block.chunk_count), text_fingerprint(block.l1_text),
+                ),
+            )
+            block_ids[int(block.block_index)] = int(cursor.lastrowid)
+        return block_ids
+
+    @staticmethod
+    def _attach_document_references(incoming_entities: list[IncomingEntity], document_id: int, block_ids: dict[int, int]) -> None:
+        for incoming in incoming_entities:
+            for attribute in incoming.attributes:
+                attribute.document_id = int(document_id)
+                attribute.block_ref_id = block_ids.get(int(attribute.block_index))
+
+    @staticmethod
+    def _attach_document_references_to_source_blocks(source_blocks_by_key: dict[str, list[dict[str, Any]]], document_id: int, block_ids: dict[int, int]) -> None:
+        for blocks in source_blocks_by_key.values():
+            for block in blocks:
+                block["document_id"] = int(document_id)
+                block["block_ref_id"] = block_ids.get(int(block.get("block_index") or -1))
 
     def list_ingest_jobs(self, *, limit: int = 20) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -88,7 +229,7 @@ class IngestJobRepositoryMixin:
                 cursor.execute(
                     """
                     SELECT id, workspace_id, project_id, collection_id, domain,
-                           source_note_id, task_name,
+                           source_note_id, document_id, task_name,
                            block_count, entity_count, queued_count, status,
                            created_at, updated_at
                     FROM knowloom_ingest_jobs

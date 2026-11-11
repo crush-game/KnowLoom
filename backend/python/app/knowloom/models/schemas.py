@@ -217,6 +217,16 @@ class StoredAttributeEvidence(BaseModel):
     note_id: str = ""
     block_id: str = ""
     block_index: int = -1
+    block_ref_id: int | None = None
+    document_id: int | None = None
+    document_title: str = ""
+    document_version: int = 0
+    doc_number: str = ""
+    doc_kind: str = ""
+    issuer: str = ""
+    issuer_level: str = ""
+    effective_at: str = ""
+    source_url: str = ""
 
 
 class StoredAttribute(BaseModel):

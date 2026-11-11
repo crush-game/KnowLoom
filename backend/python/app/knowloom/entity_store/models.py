@@ -32,6 +32,22 @@ class EntityAttributeInput:
     note_id: str = ""
     block_id: str = ""
     block_index: int = -1
+    document_id: int | None = None
+    block_ref_id: int | None = None
+
+
+@dataclass(slots=True)
+class DocumentMetadata:
+    doc_key: str = ""
+    title: str = ""
+    doc_number: str = ""
+    doc_kind: str = "regulation"
+    issuer: str = ""
+    issuer_level: str = "university"
+    audience: str = ""
+    source_url: str = ""
+    published_at: str = ""
+    effective_at: str = ""
 
 
 @dataclass(slots=True)
@@ -177,6 +193,8 @@ class EntityIngestQueueResult:
     status: str
     queued_count: int
     incoming_entity_ids: list[int] = field(default_factory=list)
+    document_id: int | None = None
+    duplicate: bool = False
 
 
 @dataclass(slots=True)

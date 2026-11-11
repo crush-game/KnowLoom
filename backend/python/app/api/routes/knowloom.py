@@ -5,13 +5,15 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.knowloom.entity_store.ingestor import EntityIngestor
-from app.knowloom.entity_store.models import EntityScope
+from app.knowloom.entity_store.models import DocumentMetadata, EntityScope
 from app.knowloom.entity_store.repository import MySQLEntityRepository
 from app.knowloom.entity_store.worker import entity_worker_runtime_status
+from app.knowloom.entity_store.normalizer import text_fingerprint
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
+from app.knowloom.services.doc_meta import suggest_effective_at
 from app.core.security import require_auth
 
 
@@ -29,6 +31,15 @@ class KnowLoomIngestRequest(BaseModel):
     text: str = Field(..., min_length=1)
     note_id: str = ""
     task_name: str = ""
+    title: str = ""
+    doc_number: str = ""
+    doc_kind: str = Field(default="regulation", pattern="^(regulation|amendment|notice|guide|other)$")
+    issuer: str = ""
+    issuer_level: str = Field(default="university", pattern="^(national|university|department)$")
+    audience: str = ""
+    source_url: str = ""
+    published_at: str = ""
+    effective_at: str = ""
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 
@@ -50,6 +61,9 @@ class KnowLoomIngestResponse(BaseModel):
     status: str = "queued"
     queued_count: int = 0
     incoming_entity_ids: list[int] = Field(default_factory=list)
+    document_id: int | None = None
+    duplicate: bool = False
+    effective_at_suggestion: str = ""
     ingest_results: list[dict[str, object]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -122,12 +136,32 @@ def debug_extract_payload(preprocess: KnowLoomPreprocessResult) -> dict[str, obj
 @router.post("/ingest", response_model=KnowLoomIngestResponse)
 async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
     scope = to_scope(request.scope)
+    metadata = document_metadata_from_request(request)
+    repository = MySQLEntityRepository()
+    suggestion = "" if request.effective_at else suggest_effective_at(request.text)
     try:
+        duplicate = await asyncio.to_thread(
+            repository.find_duplicate_document,
+            scope=scope,
+            doc_key=metadata.doc_key,
+            content_fingerprint=text_fingerprint(request.text),
+        )
+        if duplicate:
+            return KnowLoomIngestResponse(
+                preprocess=KnowLoomPreprocessResult(input_text=request.text),
+                job_id=0,
+                status="duplicate",
+                queued_count=0,
+                document_id=int(duplicate["id"]),
+                duplicate=True,
+                effective_at_suggestion=suggestion,
+            )
         preprocess = await KnowLoomProcessor().preprocess(request.text)
         queue_result = await EntityIngestor(scope=scope).queue(
             preprocess,
             source_note_id=request.note_id,
             task_name=request.task_name,
+            document_metadata=metadata,
         )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
@@ -138,7 +172,37 @@ async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
         status=queue_result.status,
         queued_count=queue_result.queued_count,
         incoming_entity_ids=queue_result.incoming_entity_ids,
+        document_id=queue_result.document_id,
+        duplicate=queue_result.duplicate,
+        effective_at_suggestion=suggestion,
     )
+
+
+@router.get("/blocks/{block_id}")
+async def get_block(block_id: int, context: bool = True) -> dict[str, object]:
+    try:
+        block = await asyncio.to_thread(MySQLEntityRepository().get_block_with_context, block_id, context=context)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    if block is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="block not found")
+    return block
+
+
+@router.get("/documents/{doc_key}/versions")
+async def get_document_versions(
+    doc_key: str,
+    workspace_id: str = "local",
+    project_id: str = "knowloom",
+    collection_id: str = "default",
+    domain: str = "general",
+) -> dict[str, object]:
+    scope = EntityScope(workspace_id=workspace_id, project_id=project_id, collection_id=collection_id, domain=domain)
+    try:
+        versions = await asyncio.to_thread(MySQLEntityRepository().list_document_versions, scope=scope, doc_key=doc_key)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    return {"doc_key": doc_key, "versions": versions}
 
 
 @router.post("/query", response_model=KnowLoomQueryResult)
@@ -289,4 +353,19 @@ def to_scope(payload: KnowLoomScopePayload) -> EntityScope:
         project_id=payload.project_id,
         collection_id=payload.collection_id,
         domain=payload.domain,
+    )
+
+
+def document_metadata_from_request(request: KnowLoomIngestRequest) -> DocumentMetadata:
+    return DocumentMetadata(
+        doc_key=str(request.note_id or text_fingerprint(request.text)),
+        title=request.title,
+        doc_number=request.doc_number,
+        doc_kind=request.doc_kind,
+        issuer=request.issuer,
+        issuer_level=request.issuer_level,
+        audience=request.audience,
+        source_url=request.source_url,
+        published_at=request.published_at,
+        effective_at=request.effective_at,
     )
