@@ -5,7 +5,7 @@ from pydantic import ValidationError
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.constants import DEFAULT_ENTITY_TYPE, ENTITY_TYPES, FALLBACK_SLOT, SLOTS, SLOT_SPECS, slots_for
 from app.knowloom.llm import KnowLoomLLMClient
-from app.knowloom.models import BlockEntityExtraction, BlockExtractionFailure, BlockExtractionResult, EntityAdmissionJudgeScore, ExtractedEntity, TextBlock
+from app.knowloom.models import AttributeValue, BlockEntityExtraction, BlockExtractionFailure, BlockExtractionResult, EntityAdmissionJudgeScore, ExtractedEntity, TextBlock
 from app.knowloom.prompts import ENTITY_EXTRACTION_SYSTEM_PROMPT
 
 
@@ -146,6 +146,8 @@ class EntityExtractor:
             raise ValueError(f"block {block.block_index} extraction schema validation failed: {exc}") from exc
 
         accepted_entities: list[ExtractedEntity] = []
+        dropped_candidates: list[dict[str, object]] = []
+        deferred_demotions: list[tuple[ExtractedEntity, EntityAdmissionJudgeScore]] = []
         warnings = list(result.warnings)
         for entity in result.entities:
             warnings.extend(normalize_entity_slots(entity))
@@ -169,14 +171,20 @@ class EntityExtractor:
                 if judge_score.decision == "entity" and score >= self.config.entity_admission_judge_threshold:
                     accepted_entities.append(entity)
                     continue
+                deferred_demotions.append((entity, judge_score))
                 warnings.append(
-                    f"dropped non-entity candidate by judge: {entity.name} "
-                    f"(decision={judge_score.decision}, entity_score={score:.3f} < {self.config.entity_admission_judge_threshold:.2f})"
+                    f"non-entity candidate deferred for demotion: {entity.name} "
+                    f"(decision={judge_score.decision}, entity_score={score:.3f})"
                 )
             else:
                 accepted_entities.append(entity)
 
-        return BlockEntityExtraction(block=block, entities=accepted_entities, warnings=warnings)
+        for candidate, judge in deferred_demotions:
+            outcome = demote_to_parent(candidate, judge, accepted_entities, block)
+            dropped_candidates.append(outcome)
+            if outcome["action"] != "demoted":
+                warnings.append(f"dropped non-entity candidate: {candidate.name} ({outcome['reason']})")
+        return BlockEntityExtraction(block=block, entities=accepted_entities, warnings=warnings, dropped_candidates=dropped_candidates)
 
     async def judge_entity(self, block: TextBlock, entity: ExtractedEntity) -> EntityAdmissionJudgeScore:
         data = await self.judge_llm.chat_json(
@@ -211,3 +219,29 @@ def normalize_entity_slots(entity: ExtractedEntity) -> list[str]:
             attribute.value = attribute.value[:200].rstrip()
             warnings.append(f"{FALLBACK_SLOT} value truncated to 200 characters")
     return warnings
+
+
+DEMOTE_DEFAULT_SLOT = {"step": "procedure", "condition": "conditions", "attribute": "notes"}
+
+def demote_to_parent(candidate: ExtractedEntity, judge: EntityAdmissionJudgeScore, accepted: list[ExtractedEntity], block: TextBlock) -> dict[str, object]:
+    if judge.decision not in DEMOTE_DEFAULT_SLOT:
+        return {"name": candidate.name, "stage": "judge", "decision": judge.decision, "score": judge.entity_score, "parent": judge.parent_entity, "action": "dropped", "slot": "", "reason": "not_demotable"}
+    parent = find_parent_entity(accepted, judge.parent_entity) if judge.parent_entity else find_parent_entity(accepted, block.anchor_entity)
+    if parent is None:
+        return {"name": candidate.name, "stage": "judge", "decision": judge.decision, "score": judge.entity_score, "parent": judge.parent_entity or block.anchor_entity, "action": "dropped", "slot": "", "reason": "parent_not_accepted"}
+    slot = judge.attribute_type if judge.attribute_type in slots_for(parent.entity_type) else DEMOTE_DEFAULT_SLOT[judge.decision]
+    if slot not in slots_for(parent.entity_type):
+        slot = FALLBACK_SLOT
+    detail = next((item.value for item in candidate.attributes.root if item.value), candidate.identity_description or candidate.name)
+    evidence = next((item.evidence for item in candidate.attributes.root if item.evidence), block.l1_text)
+    parent.attributes.root.append(AttributeValue(slot=slot, value=f"{candidate.name}：{detail}"[:200], evidence=evidence, confidence=0.6))
+    return {"name": candidate.name, "stage": "judge", "decision": judge.decision, "score": judge.entity_score, "parent": parent.name, "action": "demoted", "slot": slot, "reason": ""}
+
+def find_parent_entity(entities: list[ExtractedEntity], name: str) -> ExtractedEntity | None:
+    needle = " ".join(str(name or "").split())
+    if not needle:
+        return None
+    for entity in entities:
+        if needle == entity.name or needle in entity.aliases:
+            return entity
+    return None

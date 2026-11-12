@@ -197,6 +197,7 @@ class BlockEntityExtraction(BaseModel):
     block: TextBlock
     entities: list[ExtractedEntity] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    dropped_candidates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class BlockExtractionFailure(BaseModel):
