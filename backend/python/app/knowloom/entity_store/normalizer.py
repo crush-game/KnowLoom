@@ -44,14 +44,18 @@ def dedupe_extracted_entities(
                     scope=entity_scope,
                     aliases=list(entity.aliases),
                     identity_description=entity.identity_description,
+                    identity_source=entity.identity_source,
+                    identity_user_text=entity.identity_user_text,
                     attributes=[],
                     source_count=0,
                 )
                 grouped[key] = incoming
             else:
                 incoming.aliases = merge_unique([*incoming.aliases, *entity.aliases])
-                if not incoming.identity_description and entity.identity_description:
+                if identity_source_rank(entity.identity_source) > identity_source_rank(incoming.identity_source) or (not incoming.identity_description and entity.identity_description):
                     incoming.identity_description = entity.identity_description
+                    incoming.identity_source = entity.identity_source
+                    incoming.identity_user_text = entity.identity_user_text
 
             incoming.source_count += 1
             incoming.attributes = merge_attributes(
@@ -134,3 +138,28 @@ def source_block_id(source_note_id: str, block_index: int) -> str:
     if not note_id:
         return ""
     return f"{note_id}:block:{int(block_index)}"
+
+
+def identity_source_rank(source: str) -> int:
+    return {"model_prior": 1, "derived": 2, "user": 3}.get(str(source or ""), 0)
+
+def apply_glossary(blocks: list[BlockEntityExtraction], glossary: list[dict[str, object]]) -> list[str]:
+    entities = [entity for block in blocks for entity in block.entities]
+    unmatched: list[str] = []
+    for item in glossary:
+        name = str(item.get("name") or "").strip()
+        aliases = [str(value) for value in item.get("aliases", []) if str(value).strip()]
+        definition = str(item.get("definition") or "").strip()
+        keys = {normalize_name(name), *(normalize_name(value) for value in aliases)}
+        matched = False
+        for entity in entities:
+            entity_keys = {normalize_name(entity.name), *(normalize_name(value) for value in entity.aliases)}
+            if keys & entity_keys:
+                entity.identity_description = definition
+                entity.identity_source = "user"
+                entity.identity_user_text = definition
+                entity.aliases = merge_unique([*entity.aliases, *aliases])
+                matched = True
+        if not matched and name:
+            unmatched.append(name)
+    return unmatched

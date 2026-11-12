@@ -9,7 +9,7 @@ from app.knowloom.entity_store.ingestor import EntityIngestor
 from app.knowloom.entity_store.models import DocumentMetadata, EntityScope
 from app.knowloom.entity_store.repository import MySQLEntityRepository
 from app.knowloom.entity_store.worker import entity_worker_runtime_status
-from app.knowloom.entity_store.normalizer import text_fingerprint
+from app.knowloom.entity_store.normalizer import apply_glossary, text_fingerprint
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
 from app.knowloom.services.ask import KnowLoomAskService
@@ -17,6 +17,7 @@ from app.knowloom.services.file_text import extract_file_text
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
 from app.knowloom.services.doc_meta import suggest_effective_at
+from app.knowloom.services.document_relations import detect_document_relations
 from app.core.security import require_auth
 
 
@@ -28,6 +29,12 @@ class KnowLoomScopePayload(BaseModel):
     project_id: str = "knowloom"
     collection_id: str = "default"
     domain: str = "general"
+
+
+class GlossaryItem(BaseModel):
+    name: str = Field(..., min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    definition: str = Field(..., min_length=1, max_length=1000)
 
 
 class KnowLoomIngestRequest(BaseModel):
@@ -43,6 +50,7 @@ class KnowLoomIngestRequest(BaseModel):
     source_url: str = ""
     published_at: str = ""
     effective_at: str = ""
+    glossary: list[GlossaryItem] = Field(default_factory=list)
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 
@@ -77,6 +85,7 @@ class KnowLoomIngestResponse(BaseModel):
     effective_at_suggestion: str = ""
     ingest_results: list[dict[str, object]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    glossary_unmatched: list[str] = Field(default_factory=list)
 
 
 class KnowLoomReviewTaskListResponse(BaseModel):
@@ -182,12 +191,17 @@ async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
                 effective_at_suggestion=suggestion,
             )
         preprocess = await KnowLoomProcessor().preprocess(request.text)
+        glossary_unmatched = apply_glossary(preprocess.blocks, [item.model_dump() for item in request.glossary])
         queue_result = await EntityIngestor(scope=scope).queue(
             preprocess,
             source_note_id=request.note_id,
             task_name=request.task_name,
             document_metadata=metadata,
         )
+        for relation in detect_document_relations(request.text):
+            target = await asyncio.to_thread(repository.find_document_by_title, scope=scope, title=relation.target_title)
+            if target and str(target.get("doc_key") or "") != metadata.doc_key:
+                await asyncio.to_thread(repository.add_document_relation, scope, source_doc_key=metadata.doc_key, target_doc_key=str(target["doc_key"]), relation_type=relation.relation_type, confidence=relation.confidence, source="rule")
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -200,6 +214,7 @@ async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
         document_id=queue_result.document_id,
         duplicate=queue_result.duplicate,
         effective_at_suggestion=suggestion,
+        glossary_unmatched=glossary_unmatched,
     )
 
 

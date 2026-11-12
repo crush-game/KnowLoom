@@ -247,6 +247,12 @@ def ensure_identity_schema(cursor: Any) -> None:
     for name, statement in additions.items():
         if name not in columns:
             cursor.execute(statement)
+    cursor.execute("SHOW COLUMNS FROM knowloom_incoming_entities")
+    incoming_columns = {str(row["Field"]) for row in cursor.fetchall()}
+    if "identity_source" not in incoming_columns:
+        cursor.execute("ALTER TABLE knowloom_incoming_entities ADD COLUMN identity_source VARCHAR(16) NOT NULL DEFAULT 'model_prior' AFTER identity_description")
+    if "identity_user_text" not in incoming_columns:
+        cursor.execute("ALTER TABLE knowloom_incoming_entities ADD COLUMN identity_user_text TEXT NULL AFTER identity_source")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS knowloom_entity_identity_events (
             id BIGINT PRIMARY KEY AUTO_INCREMENT, entity_id BIGINT NOT NULL, before_text TEXT NULL,

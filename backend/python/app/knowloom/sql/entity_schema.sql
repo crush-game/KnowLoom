@@ -196,6 +196,8 @@ CREATE TABLE IF NOT EXISTS knowloom_incoming_entities (
     entity_type VARCHAR(64) NOT NULL DEFAULT 'concept',
     aliases_json JSON NOT NULL,
     identity_description TEXT NOT NULL,
+    identity_source VARCHAR(16) NOT NULL DEFAULT 'model_prior',
+    identity_user_text TEXT NULL,
     description_for_match TEXT NOT NULL,
     attributes_json JSON NOT NULL,
     source_blocks_json JSON NOT NULL,

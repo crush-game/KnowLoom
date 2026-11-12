@@ -497,7 +497,7 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                     """
                     SELECT id, job_id, workspace_id, project_id, collection_id, domain,
                            name, normalized_name, entity_type, aliases_json,
-                           identity_description, description_for_match, attributes_json,
+                           identity_description, identity_source, identity_user_text, description_for_match, attributes_json,
                            source_count, status, attempt_count
                     FROM knowloom_incoming_entities
                     WHERE id = %s

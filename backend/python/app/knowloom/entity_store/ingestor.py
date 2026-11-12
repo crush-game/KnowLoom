@@ -387,7 +387,16 @@ class EntityIngestor:
 
             identity_draft = build_derived_identity(decision.incoming.name, decision.incoming.attributes)
             identity_writer = getattr(self.repository, "update_identity", None)
-            if identity_draft is not None and identity_writer is not None:
+            if identity_writer is not None and decision.incoming.identity_source == "user" and decision.incoming.identity_user_text:
+                await asyncio.to_thread(
+                    identity_writer,
+                    result.entity_id,
+                    text=decision.incoming.identity_description or decision.incoming.identity_user_text,
+                    source="user",
+                    trigger_reason="user_glossary",
+                    user_text=decision.incoming.identity_user_text,
+                )
+            elif identity_draft is not None and identity_writer is not None:
                 await asyncio.to_thread(
                     identity_writer,
                     result.entity_id,

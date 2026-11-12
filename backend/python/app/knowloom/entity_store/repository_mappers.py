@@ -84,6 +84,8 @@ def row_to_incoming_task(row: dict[str, Any]) -> IncomingEntityTask:
         ),
         aliases=json.loads(row.get("aliases_json") or "[]"),
         identity_description=str(row.get("identity_description") or ""),
+        identity_source=str(row.get("identity_source") or "model_prior"),
+        identity_user_text=str(row.get("identity_user_text") or ""),
         attributes=attributes,
         description_for_match=str(row.get("description_for_match") or ""),
         source_count=int(row.get("source_count") or 1),

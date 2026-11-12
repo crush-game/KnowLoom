@@ -135,6 +135,8 @@ class ExtractedEntity(BaseModel):
         default="",
         description="Short model-generated description used only for entity identity resolution.",
     )
+    identity_source: str = "model_prior"
+    identity_user_text: str = ""
     admission_score: EntityAdmissionScore = Field(default_factory=EntityAdmissionScore)
     admission_judge: EntityAdmissionJudgeScore | None = None
     attributes: AttributeBucket = Field(default_factory=AttributeBucket)

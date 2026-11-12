@@ -84,6 +84,14 @@ class IngestJobRepositoryMixin:
                 )
                 return cursor.fetchone()
 
+    def find_document_by_title(self, *, scope: EntityScope, title: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT id, doc_key, version_no, title, status FROM knowloom_documents
+                    WHERE workspace_id=%s AND project_id=%s AND collection_id=%s AND domain=%s AND title=%s AND status='active'
+                    ORDER BY version_no DESC LIMIT 1""", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, title))
+                return cursor.fetchone()
+
     def get_block_with_context(self, block_id: int, *, context: bool = True) -> dict[str, Any] | None:
         with self.connect() as connection:
             with connection.cursor() as cursor:
@@ -340,10 +348,10 @@ class IngestJobRepositoryMixin:
                 INSERT INTO knowloom_incoming_entities (
                     job_id, workspace_id, project_id, collection_id, domain,
                     dedupe_key, name, normalized_name, entity_type, aliases_json,
-                    identity_description, description_for_match, attributes_json,
+                    identity_description, identity_source, identity_user_text, description_for_match, attributes_json,
                     source_blocks_json, source_count, status, decision_reason, last_error
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '')
                 ON DUPLICATE KEY UPDATE
                     updated_at = CURRENT_TIMESTAMP,
                     id = LAST_INSERT_ID(id)
@@ -360,6 +368,8 @@ class IngestJobRepositoryMixin:
                     incoming.entity_type or "concept",
                     json.dumps(incoming.aliases, ensure_ascii=False),
                     incoming.identity_description,
+                    incoming.identity_source,
+                    incoming.identity_user_text or None,
                     incoming.description_for_match,
                     json.dumps([asdict(attribute) for attribute in incoming.attributes], ensure_ascii=False),
                     json.dumps(source_blocks_by_key.get(key, []), ensure_ascii=False),
