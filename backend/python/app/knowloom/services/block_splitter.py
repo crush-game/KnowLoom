@@ -1,11 +1,25 @@
+import asyncio
+from dataclasses import dataclass
 from time import perf_counter
+from typing import Any
 
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.llm import KnowLoomLLMClient
 from app.knowloom.models import BlockSplitResult, TextBlock
 from app.knowloom.prompts import BLOCK_SPLIT_SYSTEM_PROMPT
-from app.knowloom.services.markdown_units import parse_units
+from app.knowloom.services.markdown_units import TextUnit, build_windows, parse_units
 
+
+UNIT_GROUP_SYSTEM_PROMPT = """你是学校规章制度的单元分组器。输入已经由代码切成不可修改的单元。只输出连续单元编号范围，不复制或改写原文。连续几条讲同一事项时合并；标题、定义句优先作为 anchor_entity；列表和步骤不要单独成组。只输出 JSON：{"groups":[{"start":1,"end":3,"anchor_entity":"事项","candidate_entities":[],"split_reason":"heading","anchor_confidence":0.9}]}。"""
+
+@dataclass(slots=True)
+class UnitGroup:
+    start: int
+    end: int
+    anchor_entity: str = ""
+    candidate_entities: list[str] | None = None
+    split_reason: str = "entity_anchor"
+    anchor_confidence: float = 0.0
 
 class BlockSplitter:
     def __init__(self, llm_client: KnowLoomLLMClient, config: KnowLoomSettings = settings) -> None:
@@ -17,21 +31,105 @@ class BlockSplitter:
         return blocks
 
     async def split_with_timings(self, text: str) -> tuple[list[TextBlock], dict[str, float]]:
-        timings: dict[str, float] = {}
-        split_started_at = perf_counter()
+        started = perf_counter()
         units = parse_units(text, max_unit_chars=self.config.max_block_chars)
-        # D-011: the code owns every source span; model grouping may be layered on later,
-        # but cannot rewrite or omit original text.
-        timings["entity_anchor_split_ms"] = elapsed_ms(split_started_at)
-        normalize_started_at = perf_counter()
-        blocks = [
-            TextBlock(block_index=index, heading=" / ".join(unit.heading_path) or f"Unit {unit.unit_id + 1}", anchor_entity="", candidate_entities=[], l1_text=unit.text, split_reason=f"unit_{unit.kind}", anchor_confidence=0.0, parent_block_index=None, chunk_index=0, chunk_count=1, char_start=unit.char_start, char_end=unit.char_end)
-            for index, unit in enumerate(units)
-        ]
-        timings["physical_chunk_split_ms"] = elapsed_ms(normalize_started_at)
-        if not blocks:
-            raise ValueError("block split returned no usable blocks")
-        return blocks, timings
+        windows = build_windows(units)
+        semaphore = asyncio.Semaphore(max(1, int(self.config.max_concurrency)))
+
+        async def group_one(window: list[TextUnit]) -> list[UnitGroup]:
+            async with semaphore:
+                return await self._group_window(window)
+
+        grouped_windows = await asyncio.gather(*(group_one(window) for window in windows)) if windows else []
+        groups: list[UnitGroup] = []
+        inherited_anchor = ""
+        for window_groups in grouped_windows:
+            for group in window_groups:
+                if not group.anchor_entity:
+                    group.anchor_entity = inherited_anchor
+                    if group.split_reason == "entity_anchor":
+                        group.split_reason = "inherited_anchor"
+                if group.anchor_entity:
+                    inherited_anchor = group.anchor_entity
+                groups.append(group)
+        blocks = materialize_groups(text, units, groups)
+        if not blocks and text:
+            blocks = [fallback_source_block(text, [])]
+        return blocks, {"unit_parse_and_group_ms": elapsed_ms(started)}
+
+    async def _group_window(self, window: list[TextUnit]) -> list[UnitGroup]:
+        if not window:
+            return []
+        try:
+            data = await self.llm.chat_json(
+                system_prompt=UNIT_GROUP_SYSTEM_PROMPT,
+                user_payload={"heading_path": window[0].heading_path, "units": [{"id": unit.unit_id, "kind": unit.kind, "text": unit.text} for unit in window]},
+                operation_name=f"KnowLoom unit grouping {window[0].unit_id}-{window[-1].unit_id}",
+            )
+            raw_groups = data.get("groups") if isinstance(data, dict) else None
+            groups = [unit_group_from_dict(item) for item in raw_groups] if isinstance(raw_groups, list) else []
+            validated = validate_groups(groups, window)
+            if validated is not None:
+                return validated
+        except Exception:
+            pass
+        return fallback_groups(window)
+
+
+def unit_group_from_dict(item: Any) -> UnitGroup:
+    if not isinstance(item, dict):
+        raise ValueError("unit group must be an object")
+    return UnitGroup(start=int(item["start"]), end=int(item["end"]), anchor_entity=str(item.get("anchor_entity") or "").strip(), candidate_entities=[str(value) for value in item.get("candidate_entities", [])], split_reason=str(item.get("split_reason") or "entity_anchor"), anchor_confidence=max(0.0, min(1.0, float(item.get("anchor_confidence") or 0.0))))
+
+
+def validate_groups(groups: list[UnitGroup], window: list[TextUnit]) -> list[UnitGroup] | None:
+    if not window:
+        return []
+    first, last = window[0].unit_id, window[-1].unit_id
+    result: list[UnitGroup] = []
+    expected = first
+    for group in sorted(groups, key=lambda item: item.start):
+        if group.start < expected or group.end < group.start or group.end > last:
+            return None
+        if group.start > expected:
+            result.extend(fill_gap(window, expected, group.start - 1))
+        result.append(group)
+        expected = group.end + 1
+    if expected <= last:
+        result.extend(fill_gap(window, expected, last))
+    return result
+
+
+def fill_gap(window: list[TextUnit], start: int, end: int) -> list[UnitGroup]:
+    selected = [unit for unit in window if start <= unit.unit_id <= end]
+    if not selected:
+        return []
+    groups: list[UnitGroup] = []
+    group_start = selected[0].unit_id
+    anchor = ""
+    for index, unit in enumerate(selected):
+        if unit.kind == "heading" and index > 0:
+            groups.append(UnitGroup(group_start, selected[index - 1].unit_id, anchor_entity=anchor, split_reason="heading_fallback" if anchor else "inherited_anchor", anchor_confidence=0.3 if anchor else 0.0))
+            group_start = unit.unit_id
+        if unit.kind == "heading":
+            anchor = unit.text.strip().lstrip("#").strip()
+    groups.append(UnitGroup(group_start, selected[-1].unit_id, anchor_entity=anchor, split_reason="heading_fallback" if anchor else "inherited_anchor", anchor_confidence=0.3 if anchor else 0.0))
+    return groups
+
+
+def fallback_groups(window: list[TextUnit]) -> list[UnitGroup]:
+    return fill_gap(window, window[0].unit_id, window[-1].unit_id) if window else []
+
+
+def materialize_groups(content: str, units: list[TextUnit], groups: list[UnitGroup]) -> list[TextBlock]:
+    by_id = {unit.unit_id: unit for unit in units}
+    blocks: list[TextBlock] = []
+    for group in groups:
+        first, last = by_id.get(group.start), by_id.get(group.end)
+        if first is None or last is None:
+            continue
+        blocks.append(TextBlock(block_index=len(blocks), heading=" / ".join(last.heading_path or first.heading_path), anchor_entity=group.anchor_entity, candidate_entities=group.candidate_entities or [], l1_text=content[first.char_start:last.char_end], split_reason=group.split_reason, anchor_confidence=group.anchor_confidence, parent_block_index=None, chunk_index=0, chunk_count=1, char_start=first.char_start, char_end=last.char_end))
+    return blocks
 
 
 def normalize_blocks(

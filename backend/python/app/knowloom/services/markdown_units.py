@@ -99,3 +99,27 @@ def find_natural_split(text: str, start: int, hard_end: int) -> int:
         if position >= min_end:
             return position + len(separator)
     return hard_end
+
+
+def build_windows(units: list[TextUnit], *, max_window_chars: int = 6000) -> list[list[TextUnit]]:
+    if not units:
+        return []
+    windows: list[list[TextUnit]] = []
+    current: list[TextUnit] = []
+    current_chars = 0
+    for unit in units:
+        if current and current_chars + len(unit.text) > max_window_chars:
+            heading_index = next((index for index in range(len(current) - 1, 0, -1) if current[index].kind == "heading" and current[index].heading_level <= 2), -1)
+            if heading_index > 0 and sum(len(item.text) for item in current[:heading_index]) >= max_window_chars // 2:
+                windows.append(current[:heading_index])
+                current = current[heading_index:]
+                current_chars = sum(len(item.text) for item in current)
+            else:
+                windows.append(current)
+                current = []
+                current_chars = 0
+        current.append(unit)
+        current_chars += len(unit.text)
+    if current:
+        windows.append(current)
+    return windows

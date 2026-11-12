@@ -173,10 +173,15 @@ class TextBlock(BaseModel):
     char_start: int = Field(default=-1)
     char_end: int = Field(default=-1)
 
-    @field_validator("heading", "anchor_entity", "l1_text", "split_reason")
+    @field_validator("heading", "anchor_entity", "split_reason")
     @classmethod
     def clean_block_text(cls, value: str) -> str:
         return str(value or "").strip()
+
+    @field_validator("l1_text")
+    @classmethod
+    def preserve_source_text(cls, value: str) -> str:
+        return str(value or "")
 
     @field_validator("candidate_entities")
     @classmethod
