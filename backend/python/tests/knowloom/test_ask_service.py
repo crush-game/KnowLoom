@@ -15,3 +15,10 @@ def test_ask_returns_cited_evidence_and_personal_boundary():
     assert answer.personal_case is True
     assert "[1]" in answer.answer
     assert answer.citations[0]["block_ref_id"] == 9
+
+class CitedAnswer:
+    async def chat_json(self, **kwargs): return {"answer": "应完成规定课程。 [1]"}
+
+def test_ask_uses_valid_cited_llm_answer():
+    answer=asyncio.run(KnowLoomAskService(query_service=Query(), repository=Blocks(), llm_client=CitedAnswer()).ask("学位申请条件"))
+    assert answer.answer == "应完成规定课程。 [1]"
