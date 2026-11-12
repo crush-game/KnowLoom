@@ -28,6 +28,11 @@ class KnowLoomSettings(BaseSettings):
 
     max_blocks: int = 32
     max_block_chars: int = 1800
+    file_max_bytes: int = 20 * 1024 * 1024
+    file_max_pdf_pages: int = 300
+    file_max_text_chars: int = 500_000
+    file_ingest_max_concurrency: int = 2
+    file_storage_dir: str = str(PROJECT_DATA_DIR / "uploads")
 
     entity_admission_judge_enabled: bool = True
     entity_admission_judge_model: str = "deepseek-v4-flash-0731"

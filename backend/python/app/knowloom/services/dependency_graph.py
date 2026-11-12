@@ -16,6 +16,15 @@ def build_dependency_graph(
 
     for entity in entities:
         edge_count = 0
+        has_stored_relations = bool(entity.relations)
+        for relation in entity.relations:
+            if relation.target_entity_id is None or relation.target_entity_id not in entity_by_id or relation.target_entity_id == entity.id:
+                continue
+            edge = DependencyEdge(source_id=entity.id, target_id=relation.target_entity_id, relation=relation.relation_type, graph_type="semantic" if relation.dependency else "conditional", evidence=relation.evidence, weight=max(0.1, relation.confidence), dependency=relation.dependency)
+            (semantic_edges if edge.graph_type == "semantic" else conditional_edges).append(edge)
+            edge_count += 1
+        if has_stored_relations:
+            continue
         for attribute in entity.attributes:
             if edge_count >= max_edges_per_entity:
                 break
@@ -57,8 +66,9 @@ def build_dependency_graph(
     all_edges = dedupe_edges([*semantic_edges, *conditional_edges])
     semantic_edges = [edge for edge in all_edges if edge.graph_type == "semantic"]
     conditional_edges = [edge for edge in all_edges if edge.graph_type == "conditional"]
-    cycles = find_cycles(list(entity_by_id), all_edges)
-    ordered_entity_ids = topological_order_with_root_first(list(entity_by_id), all_edges, root_entity_id)
+    dependency_edges = [edge for edge in all_edges if edge.dependency]
+    cycles = find_cycles(list(entity_by_id), dependency_edges)
+    ordered_entity_ids = topological_order_with_root_first(list(entity_by_id), dependency_edges, root_entity_id)
 
     return DependencyGraph(
         root_entity_id=root_entity_id,

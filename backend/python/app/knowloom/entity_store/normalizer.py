@@ -4,7 +4,7 @@ from collections import OrderedDict
 
 from app.knowloom.constants import SLOTS
 from app.knowloom.models import BlockEntityExtraction, ExtractedEntity
-from app.knowloom.entity_store.models import EntityAttributeInput, EntityScope, IncomingEntity
+from app.knowloom.entity_store.models import EntityAttributeInput, EntityRelationInput, EntityScope, IncomingEntity
 
 
 def normalize_name(value: str) -> str:
@@ -47,6 +47,7 @@ def dedupe_extracted_entities(
                     identity_source=entity.identity_source,
                     identity_user_text=entity.identity_user_text,
                     attributes=[],
+                    relations=[],
                     source_count=0,
                 )
                 grouped[key] = incoming
@@ -58,6 +59,7 @@ def dedupe_extracted_entities(
                     incoming.identity_user_text = entity.identity_user_text
 
             incoming.source_count += 1
+            incoming.relations = merge_relations(incoming.relations, entity_to_relations(entity, block_index=block.block_index))
             incoming.attributes = merge_attributes(
                 incoming.attributes,
                 entity_to_attributes(entity, block_index=block.block_index, source_note_id=source_note_id),
@@ -163,3 +165,15 @@ def apply_glossary(blocks: list[BlockEntityExtraction], glossary: list[dict[str,
         if not matched and name:
             unmatched.append(name)
     return unmatched
+
+
+def entity_to_relations(entity: ExtractedEntity, *, block_index: int) -> list[EntityRelationInput]:
+    return [EntityRelationInput(relation_type=item.type, target_name=item.target, evidence=item.evidence, confidence=item.confidence, block_index=block_index, block_ref_id=None) for item in entity.relations]
+
+def merge_relations(existing: list[EntityRelationInput], incoming: list[EntityRelationInput]) -> list[EntityRelationInput]:
+    merged: OrderedDict[str, EntityRelationInput] = OrderedDict()
+    for item in [*existing, *incoming]:
+        key = f"{item.relation_type}:{normalize_name(item.target_name)}"
+        if key not in merged:
+            merged[key] = item
+    return list(merged.values())

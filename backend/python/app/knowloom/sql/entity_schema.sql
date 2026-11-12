@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_attribute_evidence (
     evidence_text TEXT NOT NULL,
     evidence_fingerprint CHAR(64) NOT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_knowloom_attr_evidence_fingerprint (attribute_id, evidence_fingerprint),
+    UNIQUE KEY uk_knowloom_attr_evidence_fingerprint (attribute_id, document_id, evidence_fingerprint),
     INDEX idx_knowloom_entity_evidence_attribute (attribute_id),
     INDEX idx_knowloom_entity_evidence_block (note_id, block_id),
     INDEX idx_knowloom_evidence_block_ref (block_ref_id),
@@ -139,6 +139,8 @@ CREATE TABLE IF NOT EXISTS knowloom_documents (
     content_fingerprint CHAR(64) NOT NULL,
     original_file_path VARCHAR(1024) NOT NULL DEFAULT '',
     page_map_json JSON NULL,
+    file_sha256 CHAR(64) NOT NULL DEFAULT '',
+    normalized_title VARCHAR(255) NOT NULL DEFAULT '',
     status VARCHAR(32) NOT NULL DEFAULT 'active',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_knowloom_doc_version (scope_hash, doc_key, version_no),
@@ -178,6 +180,7 @@ CREATE TABLE IF NOT EXISTS knowloom_ingest_jobs (
     entity_count INT NOT NULL DEFAULT 0,
     queued_count INT NOT NULL DEFAULT 0,
     status VARCHAR(32) NOT NULL DEFAULT 'queued',
+    swept_at TIMESTAMP NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_knowloom_ingest_jobs_scope (workspace_id, project_id, collection_id, domain),
@@ -202,6 +205,7 @@ CREATE TABLE IF NOT EXISTS knowloom_incoming_entities (
     identity_user_text TEXT NULL,
     description_for_match TEXT NOT NULL,
     attributes_json JSON NOT NULL,
+    relations_json JSON NULL,
     source_blocks_json JSON NOT NULL,
     source_count INT NOT NULL DEFAULT 1,
     status VARCHAR(32) NOT NULL DEFAULT 'pending',
@@ -445,7 +449,48 @@ CREATE TABLE IF NOT EXISTS knowloom_document_relations (
     collection_id VARCHAR(128) NOT NULL DEFAULT 'default', domain VARCHAR(128) NOT NULL DEFAULT 'general',
     source_doc_key VARCHAR(255) NOT NULL, target_doc_key VARCHAR(255) NOT NULL,
     relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 1.0, source VARCHAR(32) NOT NULL DEFAULT 'manual',
+    evidence_text TEXT NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'active',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_knowloom_document_relation (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type),
     INDEX idx_knowloom_document_relation_target (target_doc_key, relation_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS knowloom_entity_relations (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    scope_hash CHAR(40) NOT NULL,
+    source_entity_id BIGINT NOT NULL,
+    target_name VARCHAR(255) NOT NULL,
+    target_normalized_name VARCHAR(255) NOT NULL,
+    target_entity_id BIGINT NULL,
+    relation_type VARCHAR(32) NOT NULL,
+    confidence DOUBLE NOT NULL DEFAULT 0.7,
+    status VARCHAR(16) NOT NULL DEFAULT 'active',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_knowloom_entity_relation (source_entity_id, target_normalized_name, relation_type),
+    INDEX idx_knowloom_entity_relation_target (scope_hash, target_normalized_name, target_entity_id),
+    INDEX idx_knowloom_entity_relation_target_entity (target_entity_id),
+    CONSTRAINT fk_knowloom_relation_source FOREIGN KEY (source_entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE,
+    CONSTRAINT fk_knowloom_relation_target FOREIGN KEY (target_entity_id) REFERENCES knowloom_entities(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS knowloom_entity_relation_evidence (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    relation_id BIGINT NOT NULL,
+    document_id BIGINT NULL,
+    block_ref_id BIGINT NULL,
+    evidence_text TEXT NOT NULL,
+    evidence_fingerprint CHAR(64) NOT NULL,
+    UNIQUE KEY uk_knowloom_entity_relation_evidence (relation_id, document_id, evidence_fingerprint),
+    CONSTRAINT fk_knowloom_relation_evidence_relation FOREIGN KEY (relation_id) REFERENCES knowloom_entity_relations(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS knowloom_file_ingest_jobs (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    workspace_id VARCHAR(128) NOT NULL, project_id VARCHAR(128) NOT NULL, collection_id VARCHAR(128) NOT NULL, domain VARCHAR(128) NOT NULL,
+    document_id BIGINT NOT NULL, file_name VARCHAR(255) NOT NULL, file_sha256 CHAR(64) NOT NULL, original_file_path VARCHAR(1024) NOT NULL,
+    meta_json JSON NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'converting', ingest_job_id BIGINT NULL, attempt_count INT NOT NULL DEFAULT 0,
+    last_error TEXT NOT NULL, created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_knowloom_file_job_status (status), INDEX idx_knowloom_file_job_sha (file_sha256),
+    CONSTRAINT fk_knowloom_file_job_document FOREIGN KEY (document_id) REFERENCES knowloom_documents(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

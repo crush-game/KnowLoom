@@ -76,3 +76,23 @@ def attribute_schema_payload() -> dict[str, object]:
 ISSUER_LEVEL = {"national": 3, "university": 2, "department": 1}
 AUTO_TEMPORAL_MIN_CONFIDENCE = 0.8
 AUTO_CONTEXTUAL_MIN_CONFIDENCE = 0.7
+
+@dataclass(frozen=True)
+class RelationSpec:
+    key: str
+    title: str
+    hint: str
+    dependency: bool
+
+RELATIONS = {
+    spec.key: spec
+    for spec in (
+        RelationSpec("is_a", "是一种", "A 是 B 的一种", True),
+        RelationSpec("part_of", "组成部分", "A 是 B 的环节或组成部分", True),
+        RelationSpec("handled_by", "办理机构", "A 由机构或岗位 B 受理或审批", False),
+        RelationSpec("leads_to", "导致", "满足 A 会引起 B", False),
+    )
+}
+
+def relation_spec(key: str) -> RelationSpec:
+    return RELATIONS[str(key)]

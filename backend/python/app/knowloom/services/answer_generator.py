@@ -1,7 +1,7 @@
 from app.knowloom.models import DependencyGraph, RetrievedEntity, StoredAttribute
 
 
-from app.knowloom.constants import SLOT_SPECS, slot_spec
+from app.knowloom.constants import RELATIONS, SLOT_SPECS, slot_spec
 
 
 
@@ -107,7 +107,7 @@ class StructuredAnswerGenerator:
                 target = entity_by_id.get(edge.target_id)
                 if source is None or target is None:
                     continue
-                relation = slot_spec(edge.relation).title
+                relation = RELATIONS[edge.relation].title if edge.relation in RELATIONS else slot_spec(edge.relation).title
                 graph_label = "条件依赖" if edge.graph_type == "conditional" else "语义依赖"
                 lines.append(f"- {source.canonical_name} -> {target.canonical_name}：{graph_label} / {relation}")
         if graph.cycles:

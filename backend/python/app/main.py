@@ -27,6 +27,7 @@ from app.core.evolution_jobs import recover_pending_scan_jobs, shutdown_scan_job
 from app.core.retrieval import close_retrieval_backends, initialize_retrieval_backends
 from app.core.security import validate_security_settings
 from app.knowloom.entity_store.worker import shutdown_entity_merge_workers, start_entity_merge_workers
+from app.knowloom.services.file_ingest import recover_file_ingest_jobs
 
 app = FastAPI(title=settings.app_name, debug=settings.app_debug)
 
@@ -53,6 +54,7 @@ def startup() -> None:
     initialize_knowloom_database()
     initialize_retrieval_backends()
     recover_pending_scan_jobs()
+    recover_file_ingest_jobs()
     start_entity_merge_workers()
 
 

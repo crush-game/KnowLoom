@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from app.knowloom.entity_store.models import EntityScope
+from app.knowloom.entity_store.models import CandidateEntity, EntityScope
 from app.knowloom.entity_store.repository import MySQLEntityRepository
 from app.knowloom.llm import KnowLoomLLMClient
 from app.knowloom.services.query import KnowLoomQueryService
@@ -36,6 +36,21 @@ class KnowLoomAskService:
         started = perf_counter()
         query = normalize_question(question)
         result = await self.query_service.query(query, top_k=top_k_entities)
+        if asks_for_handling(question):
+            relation_reader = getattr(self.repository, "related_entity_ids", None)
+            retriever = getattr(self.query_service, "retriever", None)
+            if relation_reader is not None and retriever is not None:
+                existing_ids = {entity.id for entity in result.retrieved_entities}
+                target_ids = await asyncio.to_thread(relation_reader, list(existing_ids), relation_type="handled_by", limit=2)
+                candidates = []
+                for target_id in target_ids:
+                    if target_id in existing_ids:
+                        continue
+                    stored = await asyncio.to_thread(self.repository.get_entity, target_id)
+                    if stored is not None:
+                        candidates.append(CandidateEntity(entity=stored, score=0.6, source="handled_by"))
+                if candidates:
+                    result.retrieved_entities.extend(await asyncio.to_thread(retriever.hydrate_candidates, candidates))
         citations, fallback_lines = build_materials(result.retrieved_entities)
         search_blocks = getattr(self.repository, "search_blocks", None)
         block_rows = await asyncio.to_thread(search_blocks, self.scope, query, limit=top_k_blocks) if search_blocks is not None else []
@@ -85,3 +100,7 @@ def normalize_question(question: str) -> str:
         if value.startswith(prefix):
             value = value[len(prefix):].strip()
     return value
+
+
+def asks_for_handling(question: str) -> bool:
+    return any(marker in str(question or "") for marker in ("谁办", "找谁", "哪个部门", "办理", "受理", "审批", "流程"))

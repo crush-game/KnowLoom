@@ -26,6 +26,7 @@ class IngestJobRepositoryMixin:
         source_note_id: str = "",
         task_name: str = "",
         document_metadata: DocumentMetadata | None = None,
+        existing_document_id: int | None = None,
     ) -> EntityIngestQueueResult:
         metadata = document_metadata or DocumentMetadata(doc_key=str(source_note_id or text_fingerprint(input_text)))
         if not metadata.doc_key:
@@ -33,7 +34,11 @@ class IngestJobRepositoryMixin:
         with self.connect() as connection:
             try:
                 with connection.cursor() as cursor:
-                    document_id = self._insert_document(cursor, scope, metadata, input_text)
+                    if existing_document_id is not None:
+                        document_id = int(existing_document_id)
+                        self._finalize_processing_document(cursor, document_id, scope, metadata, input_text)
+                    else:
+                        document_id = self._insert_document(cursor, scope, metadata, input_text)
                     block_ids = self._insert_blocks(cursor, document_id, preprocess)
                     self._attach_document_references(incoming_entities, document_id, block_ids)
                     self._attach_document_references_to_source_blocks(source_blocks_by_key, document_id, block_ids)
@@ -68,6 +73,84 @@ class IngestJobRepositoryMixin:
             incoming_entity_ids=incoming_ids,
             document_id=document_id,
         )
+
+    def check_file_upload(self, *, scope: EntityScope, file_sha256: str, normalized_title: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT id, doc_key, version_no, title, doc_number FROM knowloom_documents WHERE scope_hash=%s AND file_sha256=%s AND status='active' LIMIT 1""", (scope_hash(scope), file_sha256))
+                duplicate = cursor.fetchone()
+                same_title: list[dict[str, Any]] = []
+                if normalized_title:
+                    cursor.execute("""SELECT id, doc_key, version_no, title, doc_number FROM knowloom_documents WHERE scope_hash=%s AND normalized_title=%s AND status='active' ORDER BY version_no DESC""", (scope_hash(scope), normalized_title))
+                    same_title = cursor.fetchall()
+        return {"duplicate_of": duplicate, "same_title_documents": same_title}
+
+    def create_file_ingest_job(self, *, scope: EntityScope, file_name: str, file_sha256: str, original_file_path: str, metadata: DocumentMetadata, extra_meta: dict[str, Any] | None = None) -> dict[str, Any]:
+        key = str(metadata.doc_key or file_sha256)[:128]
+        with self.connect() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT COALESCE(MAX(version_no),0) AS version_no FROM knowloom_documents WHERE scope_hash=%s AND doc_key=%s FOR UPDATE", (scope_hash(scope), key))
+                    version_no = int((cursor.fetchone() or {}).get("version_no") or 0) + 1
+                    cursor.execute("""INSERT INTO knowloom_documents (workspace_id,project_id,collection_id,domain,scope_hash,doc_key,version_no,title,normalized_title,doc_number,doc_kind,issuer,issuer_level,audience,source_url,published_at,effective_at,content_text,content_fingerprint,original_file_path,file_sha256,status)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULLIF(%s,''),NULLIF(%s,''),'','',%s,%s,'processing')""",
+                        (scope.workspace_id,scope.project_id,scope.collection_id,scope.domain,scope_hash(scope),key,version_no,metadata.title[:255],metadata.normalized_title[:255],metadata.doc_number[:64],metadata.doc_kind[:32],metadata.issuer[:128],metadata.issuer_level[:16],metadata.audience[:128],metadata.source_url[:1024],metadata.published_at,metadata.effective_at,original_file_path[:1024],file_sha256[:64]))
+                    document_id = int(cursor.lastrowid)
+                    cursor.execute("""INSERT INTO knowloom_file_ingest_jobs (workspace_id,project_id,collection_id,domain,document_id,file_name,file_sha256,original_file_path,meta_json,status,attempt_count,last_error)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'converting',0,'')""", (scope.workspace_id,scope.project_id,scope.collection_id,scope.domain,document_id,file_name[:255],file_sha256[:64],original_file_path[:1024],json.dumps({**asdict(metadata), **(extra_meta or {})},ensure_ascii=False)))
+                    job_id = int(cursor.lastrowid)
+                connection.commit()
+            except Exception:
+                connection.rollback(); raise
+        return {"job_id":job_id,"document_id":document_id,"status":"converting"}
+
+    def get_file_ingest_job(self, job_id: int) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM knowloom_file_ingest_jobs WHERE id=%s", (int(job_id),))
+                row = cursor.fetchone()
+        if row and isinstance(row.get("meta_json"), str):
+            row["meta"] = json.loads(row["meta_json"] or "{}")
+        elif row:
+            row["meta"] = row.get("meta_json") or {}
+        return row
+
+    def update_file_ingest_job(self, job_id: int, *, status: str, ingest_job_id: int | None = None, error: str = "") -> None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE knowloom_file_ingest_jobs SET status=%s, ingest_job_id=COALESCE(%s,ingest_job_id), last_error=%s WHERE id=%s", (status,ingest_job_id,error,int(job_id)))
+            connection.commit()
+
+    def claim_file_ingest_retry(self, job_id: int) -> bool:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE knowloom_file_ingest_jobs SET status='converting', attempt_count=attempt_count+1, last_error='' WHERE id=%s AND status='failed'", (int(job_id),))
+                changed = getattr(cursor,"rowcount",0)==1
+                if changed:
+                    cursor.execute("UPDATE knowloom_documents SET status='processing' WHERE id=(SELECT document_id FROM knowloom_file_ingest_jobs WHERE id=%s)", (int(job_id),))
+            connection.commit()
+        return changed
+
+    def recover_interrupted_file_jobs(self) -> int:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE knowloom_file_ingest_jobs SET status='failed', last_error='interrupted by process restart' WHERE status IN ('converting','preprocessing')")
+                changed=int(getattr(cursor,'rowcount',0))
+            connection.commit()
+        return changed
+
+    def find_duplicate_converted_content(self, document_id: int, content_fingerprint: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT old.id, old.doc_key, old.version_no FROM knowloom_documents pending JOIN knowloom_documents old ON old.scope_hash=pending.scope_hash AND old.doc_key=pending.doc_key WHERE pending.id=%s AND old.id<>pending.id AND old.status='active' AND old.content_fingerprint=%s LIMIT 1""", (int(document_id),content_fingerprint))
+                return cursor.fetchone()
+
+    def mark_file_ingest_duplicate(self, job_id: int) -> None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE knowloom_file_ingest_jobs SET status='duplicate', last_error='' WHERE id=%s", (int(job_id),))
+                cursor.execute("UPDATE knowloom_documents SET status='duplicate' WHERE id=(SELECT document_id FROM knowloom_file_ingest_jobs WHERE id=%s)", (int(job_id),))
+            connection.commit()
 
     def find_duplicate_document(self, *, scope: EntityScope, doc_key: str, content_fingerprint: str) -> dict[str, Any] | None:
         with self.connect() as connection:
@@ -140,6 +223,18 @@ class IngestJobRepositoryMixin:
                 )
                 return cursor.fetchall()
 
+    def _finalize_processing_document(self, cursor: Any, document_id: int, scope: EntityScope, metadata: DocumentMetadata, input_text: str) -> None:
+        fingerprint = text_fingerprint(input_text)
+        cursor.execute("SELECT doc_key FROM knowloom_documents WHERE id=%s AND status='processing' FOR UPDATE", (int(document_id),))
+        row = cursor.fetchone()
+        if not row:
+            raise ValueError("processing document not found")
+        doc_key = str(row["doc_key"])
+        cursor.execute("""UPDATE knowloom_documents SET status='superseded' WHERE scope_hash=%s AND doc_key=%s AND status='active' AND id<>%s""", (scope_hash(scope), doc_key, int(document_id)))
+        cursor.execute("""UPDATE knowloom_documents SET title=%s, normalized_title=%s, doc_number=%s, doc_kind=%s, issuer=%s, issuer_level=%s, audience=%s, source_url=%s,
+            published_at=NULLIF(%s,''), effective_at=NULLIF(%s,''), content_text=%s, content_fingerprint=%s, original_file_path=%s, page_map_json=%s, file_sha256=%s, status='active' WHERE id=%s""",
+            (metadata.title[:255], metadata.normalized_title[:255], metadata.doc_number[:64], metadata.doc_kind[:32], metadata.issuer[:128], metadata.issuer_level[:16], metadata.audience[:128], metadata.source_url[:1024], metadata.published_at, metadata.effective_at, input_text, fingerprint, metadata.original_file_path[:1024], json.dumps(metadata.page_map, ensure_ascii=False) if metadata.page_map else None, metadata.file_sha256[:64], int(document_id)))
+
     def _insert_document(self, cursor: Any, scope: EntityScope, metadata: DocumentMetadata, input_text: str) -> int:
         key = str(metadata.doc_key or text_fingerprint(input_text))[:128]
         fingerprint = text_fingerprint(input_text)
@@ -163,17 +258,17 @@ class IngestJobRepositoryMixin:
             INSERT INTO knowloom_documents (
                 workspace_id, project_id, collection_id, domain, scope_hash, doc_key, version_no,
                 title, doc_number, doc_kind, issuer, issuer_level, audience, source_url,
-                published_at, effective_at, content_text, content_fingerprint, original_file_path, page_map_json, status
+                published_at, effective_at, content_text, content_fingerprint, original_file_path, page_map_json, file_sha256, normalized_title, status
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, %s, %s, 'active')
+                    NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, %s, %s, %s, %s, 'active')
             """,
             (
                 scope.workspace_id, scope.project_id, scope.collection_id, scope.domain,
                 scope_hash(scope), key, version_no, metadata.title[:255], metadata.doc_number[:64],
                 metadata.doc_kind[:32] or 'regulation', metadata.issuer[:128],
                 metadata.issuer_level[:16] or 'university', metadata.audience[:128], metadata.source_url[:1024],
-                metadata.published_at, metadata.effective_at, input_text, fingerprint, metadata.original_file_path[:1024], json.dumps(metadata.page_map, ensure_ascii=False) if metadata.page_map else None,
+                metadata.published_at, metadata.effective_at, input_text, fingerprint, metadata.original_file_path[:1024], json.dumps(metadata.page_map, ensure_ascii=False) if metadata.page_map else None, metadata.file_sha256[:64], metadata.normalized_title[:255],
             ),
         )
         return int(cursor.lastrowid)
@@ -204,6 +299,9 @@ class IngestJobRepositoryMixin:
             for attribute in incoming.attributes:
                 attribute.document_id = int(document_id)
                 attribute.block_ref_id = block_ids.get(int(attribute.block_index))
+            for relation in incoming.relations:
+                relation.document_id = int(document_id)
+                relation.block_ref_id = block_ids.get(int(relation.block_index))
 
     @staticmethod
     def _attach_document_references_to_source_blocks(source_blocks_by_key: dict[str, list[dict[str, Any]]], document_id: int, block_ids: dict[int, int]) -> None:
@@ -348,10 +446,10 @@ class IngestJobRepositoryMixin:
                 INSERT INTO knowloom_incoming_entities (
                     job_id, workspace_id, project_id, collection_id, domain,
                     dedupe_key, name, normalized_name, entity_type, aliases_json,
-                    identity_description, identity_source, identity_user_text, description_for_match, attributes_json,
+                    identity_description, identity_source, identity_user_text, description_for_match, attributes_json, relations_json,
                     source_blocks_json, source_count, status, decision_reason, last_error
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', '', '')
                 ON DUPLICATE KEY UPDATE
                     updated_at = CURRENT_TIMESTAMP,
                     id = LAST_INSERT_ID(id)
@@ -372,6 +470,7 @@ class IngestJobRepositoryMixin:
                     incoming.identity_user_text or None,
                     incoming.description_for_match,
                     json.dumps([asdict(attribute) for attribute in incoming.attributes], ensure_ascii=False),
+                    json.dumps([asdict(relation) for relation in incoming.relations], ensure_ascii=False),
                     json.dumps(source_blocks_by_key.get(key, []), ensure_ascii=False),
                     incoming.source_count,
                 ),

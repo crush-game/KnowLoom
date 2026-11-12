@@ -37,6 +37,17 @@ class EntityAttributeInput:
 
 
 @dataclass(slots=True)
+class EntityRelationInput:
+    relation_type: str
+    target_name: str
+    evidence: str
+    confidence: float = 0.7
+    block_index: int = -1
+    document_id: int | None = None
+    block_ref_id: int | None = None
+
+
+@dataclass(slots=True)
 class DocumentMetadata:
     doc_key: str = ""
     title: str = ""
@@ -50,6 +61,8 @@ class DocumentMetadata:
     effective_at: str = ""
     original_file_path: str = ""
     page_map: list[dict[str, int]] = field(default_factory=list)
+    file_sha256: str = ""
+    normalized_title: str = ""
 
 
 @dataclass(slots=True)
@@ -63,6 +76,7 @@ class IncomingEntity:
     identity_source: str = "model_prior"
     identity_user_text: str = ""
     attributes: list[EntityAttributeInput] = field(default_factory=list)
+    relations: list[EntityRelationInput] = field(default_factory=list)
     description_for_match: str = ""
     source_count: int = 1
     embedding: list[float] = field(default_factory=list)

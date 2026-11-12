@@ -24,6 +24,24 @@ class FileConversion:
     page_map: list[dict[str, int]] = field(default_factory=list)
 
 
+
+def validate_upload(filename: str, content: bytes) -> None:
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise FileTooLarge("file exceeds the 20 MB limit")
+    extension = Path(filename or "").suffix.lower()
+    if extension not in SUPPORTED_FILE_EXTENSIONS:
+        raise ValueError("only PDF, DOCX, Markdown, and text files are supported")
+    if extension != ".pdf":
+        return
+    from pypdf import PdfReader
+    reader = PdfReader(BytesIO(content))
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise FileTooLarge("PDF exceeds the 300 page limit")
+    sample = [page.extract_text() or "" for page in reader.pages[: min(5, len(reader.pages))]]
+    if sample and all(len(re.sub(r"\s+", "", text)) < 20 for text in sample):
+        raise ScannedPdf("scanned PDF without a usable text layer is not supported")
+
+
 def convert_file(filename: str, content: bytes) -> FileConversion:
     if len(content) > MAX_UPLOAD_BYTES:
         raise FileTooLarge("file exceeds the 20 MB limit")

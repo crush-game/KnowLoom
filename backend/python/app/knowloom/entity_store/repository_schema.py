@@ -29,6 +29,8 @@ def ensure_entity_table_columns(cursor: Any) -> None:
     ensure_document_layer_schema(cursor)
     ensure_identity_schema(cursor)
     ensure_document_relation_schema(cursor)
+    ensure_entity_relation_schema(cursor)
+    ensure_file_ingest_schema(cursor)
     ensure_incoming_entity_columns(cursor)
     ensure_review_table_indexes(cursor)
     ensure_attribute_decision_tables(cursor)
@@ -59,6 +61,7 @@ def ensure_ingest_job_columns(cursor: Any) -> None:
         "source_note_id": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN source_note_id VARCHAR(128) NOT NULL DEFAULT '' AFTER domain",
         "document_id": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN document_id BIGINT NULL AFTER source_note_id",
         "task_name": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN task_name VARCHAR(255) NOT NULL DEFAULT '' AFTER document_id",
+        "swept_at": "ALTER TABLE knowloom_ingest_jobs ADD COLUMN swept_at TIMESTAMP NULL AFTER status",
     }
     for column, statement in columns.items():
         if column not in existing_columns:
@@ -115,6 +118,10 @@ def ensure_document_layer_schema(cursor: Any) -> None:
             cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN original_file_path VARCHAR(1024) NOT NULL DEFAULT '' AFTER content_fingerprint")
         if "page_map_json" not in document_columns:
             cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN page_map_json JSON NULL AFTER original_file_path")
+        if "file_sha256" not in document_columns:
+            cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN file_sha256 CHAR(64) NOT NULL DEFAULT '' AFTER page_map_json")
+        if "normalized_title" not in document_columns:
+            cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN normalized_title VARCHAR(255) NOT NULL DEFAULT '' AFTER file_sha256")
     cursor.execute("SHOW TABLES LIKE 'knowloom_entity_attribute_evidence'")
     if cursor.fetchone():
         cursor.execute("SHOW COLUMNS FROM knowloom_entity_attribute_evidence")
@@ -126,6 +133,13 @@ def ensure_document_layer_schema(cursor: Any) -> None:
         for name, statement in additions.items():
             if name not in columns:
                 cursor.execute(statement)
+        cursor.execute("SHOW INDEX FROM knowloom_entity_attribute_evidence WHERE Key_name='uk_knowloom_attr_evidence_fingerprint'")
+        unique_rows = cursor.fetchall()
+        unique_columns = [str(row.get("Column_name") or "") for row in sorted(unique_rows, key=lambda row: int(row.get("Seq_in_index") or 0))]
+        if unique_columns != ["attribute_id", "document_id", "evidence_fingerprint"]:
+            if unique_rows:
+                cursor.execute("ALTER TABLE knowloom_entity_attribute_evidence DROP INDEX uk_knowloom_attr_evidence_fingerprint")
+            cursor.execute("ALTER TABLE knowloom_entity_attribute_evidence ADD UNIQUE KEY uk_knowloom_attr_evidence_fingerprint (attribute_id, document_id, evidence_fingerprint)")
         ensure_index(cursor, "knowloom_entity_attribute_evidence", "idx_knowloom_evidence_block_ref", "block_ref_id")
 
 
@@ -146,6 +160,7 @@ def ensure_incoming_entity_columns(cursor: Any) -> None:
         "decision": "ALTER TABLE knowloom_incoming_entities ADD COLUMN decision VARCHAR(32) NOT NULL DEFAULT '' AFTER matched_entity_id",
         "decision_score": "ALTER TABLE knowloom_incoming_entities ADD COLUMN decision_score DOUBLE NOT NULL DEFAULT 0 AFTER decision",
         "decision_reason": "ALTER TABLE knowloom_incoming_entities ADD COLUMN decision_reason TEXT NOT NULL AFTER decision_score",
+        "relations_json": "ALTER TABLE knowloom_incoming_entities ADD COLUMN relations_json JSON NULL AFTER attributes_json",
     }
     for column, statement in columns.items():
         if column not in existing_columns:
@@ -276,7 +291,51 @@ def ensure_document_relation_schema(cursor: Any) -> None:
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS knowloom_document_relations (
             id BIGINT PRIMARY KEY AUTO_INCREMENT, workspace_id VARCHAR(128) NOT NULL DEFAULT 'local', project_id VARCHAR(128) NOT NULL DEFAULT 'knowloom', collection_id VARCHAR(128) NOT NULL DEFAULT 'default', domain VARCHAR(128) NOT NULL DEFAULT 'general',
-            source_doc_key VARCHAR(255) NOT NULL, target_doc_key VARCHAR(255) NOT NULL, relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 1.0, source VARCHAR(32) NOT NULL DEFAULT 'manual', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            source_doc_key VARCHAR(255) NOT NULL, target_doc_key VARCHAR(255) NOT NULL, relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 1.0, source VARCHAR(32) NOT NULL DEFAULT 'manual', evidence_text TEXT NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'active', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE KEY uk_knowloom_document_relation (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type), INDEX idx_knowloom_document_relation_target (target_doc_key, relation_type)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """)
+    cursor.execute("SHOW COLUMNS FROM knowloom_document_relations")
+    relation_columns = {str(row["Field"]) for row in cursor.fetchall()}
+    if "evidence_text" not in relation_columns:
+        cursor.execute("ALTER TABLE knowloom_document_relations ADD COLUMN evidence_text TEXT NOT NULL AFTER source")
+    if "status" not in relation_columns:
+        cursor.execute("ALTER TABLE knowloom_document_relations ADD COLUMN status VARCHAR(16) NOT NULL DEFAULT 'active' AFTER evidence_text")
+
+
+def ensure_entity_relation_schema(cursor: Any) -> None:
+    cursor.execute("""CREATE TABLE IF NOT EXISTS knowloom_entity_relations (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT, scope_hash CHAR(40) NOT NULL, source_entity_id BIGINT NOT NULL,
+        target_name VARCHAR(255) NOT NULL, target_normalized_name VARCHAR(255) NOT NULL, target_entity_id BIGINT NULL,
+        relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 0.7, status VARCHAR(16) NOT NULL DEFAULT 'active',
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY uk_knowloom_entity_relation (source_entity_id, target_normalized_name, relation_type),
+        INDEX idx_knowloom_entity_relation_target (scope_hash, target_normalized_name, target_entity_id),
+        INDEX idx_knowloom_entity_relation_target_entity (target_entity_id),
+        CONSTRAINT fk_knowloom_relation_source FOREIGN KEY (source_entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE,
+        CONSTRAINT fk_knowloom_relation_target FOREIGN KEY (target_entity_id) REFERENCES knowloom_entities(id) ON DELETE SET NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+    cursor.execute("""CREATE TABLE IF NOT EXISTS knowloom_entity_relation_evidence (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT, relation_id BIGINT NOT NULL, document_id BIGINT NULL, block_ref_id BIGINT NULL,
+        evidence_text TEXT NOT NULL, evidence_fingerprint CHAR(64) NOT NULL,
+        UNIQUE KEY uk_knowloom_entity_relation_evidence (relation_id, document_id, evidence_fingerprint),
+        CONSTRAINT fk_knowloom_relation_evidence_relation FOREIGN KEY (relation_id) REFERENCES knowloom_entity_relations(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+    cursor.execute("SHOW INDEX FROM knowloom_entity_relation_evidence WHERE Key_name='uk_knowloom_entity_relation_evidence'")
+    relation_unique_rows = cursor.fetchall()
+    relation_unique_columns = [str(row.get("Column_name") or "") for row in sorted(relation_unique_rows, key=lambda row: int(row.get("Seq_in_index") or 0))]
+    if relation_unique_columns != ["relation_id", "document_id", "evidence_fingerprint"]:
+        if relation_unique_rows:
+            cursor.execute("ALTER TABLE knowloom_entity_relation_evidence DROP INDEX uk_knowloom_entity_relation_evidence")
+        cursor.execute("ALTER TABLE knowloom_entity_relation_evidence ADD UNIQUE KEY uk_knowloom_entity_relation_evidence (relation_id, document_id, evidence_fingerprint)")
+
+
+def ensure_file_ingest_schema(cursor: Any) -> None:
+    cursor.execute("""CREATE TABLE IF NOT EXISTS knowloom_file_ingest_jobs (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT, workspace_id VARCHAR(128) NOT NULL, project_id VARCHAR(128) NOT NULL, collection_id VARCHAR(128) NOT NULL, domain VARCHAR(128) NOT NULL,
+        document_id BIGINT NOT NULL, file_name VARCHAR(255) NOT NULL, file_sha256 CHAR(64) NOT NULL, original_file_path VARCHAR(1024) NOT NULL, meta_json JSON NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'converting', ingest_job_id BIGINT NULL, attempt_count INT NOT NULL DEFAULT 0, last_error TEXT NOT NULL,
+        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_knowloom_file_job_status (status), INDEX idx_knowloom_file_job_sha (file_sha256),
+        CONSTRAINT fk_knowloom_file_job_document FOREIGN KEY (document_id) REFERENCES knowloom_documents(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")

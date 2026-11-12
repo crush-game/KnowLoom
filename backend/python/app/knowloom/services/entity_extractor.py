@@ -3,7 +3,7 @@ import asyncio
 from pydantic import ValidationError
 
 from app.knowloom.config import KnowLoomSettings, settings
-from app.knowloom.constants import DEFAULT_ENTITY_TYPE, ENTITY_TYPES, FALLBACK_SLOT, SLOTS, SLOT_SPECS, slots_for
+from app.knowloom.constants import DEFAULT_ENTITY_TYPE, ENTITY_TYPES, FALLBACK_SLOT, RELATIONS, SLOTS, SLOT_SPECS, slots_for
 from app.knowloom.llm import KnowLoomLLMClient
 from app.knowloom.models import AttributeValue, BlockEntityExtraction, BlockExtractionFailure, BlockExtractionResult, EntityAdmissionJudgeScore, ExtractedEntity, TextBlock
 from app.knowloom.prompts import ENTITY_EXTRACTION_SYSTEM_PROMPT
@@ -151,6 +151,7 @@ class EntityExtractor:
         warnings = list(result.warnings)
         for entity in result.entities:
             warnings.extend(normalize_entity_slots(entity))
+            warnings.extend(normalize_entity_relations(entity, block))
             score = entity.admission_score.aggregate_score
             if score < ENTITY_ADMISSION_THRESHOLD:
                 warnings.append(
@@ -245,3 +246,24 @@ def find_parent_entity(entities: list[ExtractedEntity], name: str) -> ExtractedE
         if needle == entity.name or needle in entity.aliases:
             return entity
     return None
+
+
+def normalize_entity_relations(entity: ExtractedEntity, block: TextBlock) -> list[str]:
+    warnings: list[str] = []
+    valid = []
+    normalized_block = "".join(block.l1_text.split()).lower()
+    normalized_self = "".join(entity.name.split()).lower()
+    for relation in entity.relations:
+        normalized_target = "".join(relation.target.split()).lower()
+        if relation.type not in RELATIONS:
+            warnings.append(f"unknown relation type {relation.type}; dropped")
+        elif not normalized_target or normalized_target == normalized_self:
+            warnings.append(f"self or empty relation target for {entity.name}; dropped")
+        elif normalized_target not in normalized_block:
+            warnings.append(f"relation target {relation.target} is absent from source block; dropped")
+        elif relation.evidence not in block.l1_text:
+            warnings.append(f"relation evidence for {relation.target} is not an exact source span; dropped")
+        else:
+            valid.append(relation)
+    entity.relations = valid
+    return warnings

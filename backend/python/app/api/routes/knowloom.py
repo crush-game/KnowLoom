@@ -1,7 +1,9 @@
 import asyncio
+from hashlib import sha256
+from pathlib import Path
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.knowloom.constants import attribute_schema_payload
@@ -13,11 +15,13 @@ from app.knowloom.entity_store.normalizer import apply_glossary, text_fingerprin
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
 from app.knowloom.services.ask import KnowLoomAskService
-from app.knowloom.services.file_text import FileTooLarge, ScannedPdf, convert_file, persist_original_file
+from app.knowloom.services.file_text import FileTooLarge, ScannedPdf, convert_file, persist_original_file, validate_upload
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
 from app.knowloom.services.doc_meta import suggest_effective_at
 from app.knowloom.services.document_relations import detect_document_relations
+from app.knowloom.services.title_normalizer import normalize_document_title
+from app.knowloom.services.file_ingest import process_file_ingest_job
 from app.core.security import require_auth
 
 
@@ -37,6 +41,34 @@ class GlossaryItem(BaseModel):
     definition: str = Field(..., min_length=1, max_length=1000)
 
 
+class KnowLoomFileCheckRequest(BaseModel):
+    file_sha256: str = Field(..., min_length=64, max_length=64)
+    file_name: str
+    title: str = ""
+    scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
+
+class KnowLoomFileMeta(BaseModel):
+    doc_key: str = ""
+    title: str = ""
+    doc_number: str = ""
+    doc_kind: str = Field(default="regulation", pattern="^(regulation|amendment|notice|guide|other)$")
+    issuer: str = ""
+    issuer_level: str = Field(default="university", pattern="^(national|university|department)$")
+    audience: str = ""
+    source_url: str = ""
+    published_at: str = ""
+    effective_at: str = ""
+    glossary: list[GlossaryItem] = Field(default_factory=list)
+    relations: list[dict[str, object]] = Field(default_factory=list)
+    scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
+
+class KnowLoomFileAccepted(BaseModel):
+    job_id: int
+    document_id: int
+    status: str
+    warnings: list[str] = Field(default_factory=list)
+
+
 class KnowLoomIngestRequest(BaseModel):
     text: str = Field(..., min_length=1)
     note_id: str = ""
@@ -53,6 +85,7 @@ class KnowLoomIngestRequest(BaseModel):
     glossary: list[GlossaryItem] = Field(default_factory=list)
     original_file_path: str = Field(default="", exclude=True)
     page_map: list[dict[str, int]] = Field(default_factory=list, exclude=True)
+    file_sha256: str = Field(default="", exclude=True)
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 
@@ -160,6 +193,62 @@ def debug_extract_payload(preprocess: KnowLoomPreprocessResult) -> dict[str, obj
     }
 
 
+@router.post("/ingest/file/check")
+async def check_ingest_file(payload: KnowLoomFileCheckRequest) -> dict[str, object]:
+    scope = to_scope(payload.scope)
+    normalized_title = normalize_document_title(payload.title or payload.file_name)
+    return await asyncio.to_thread(MySQLEntityRepository().check_file_upload, scope=scope, file_sha256=payload.file_sha256.lower(), normalized_title=normalized_title)
+
+
+@router.post("/ingest/file", status_code=status.HTTP_202_ACCEPTED, response_model=KnowLoomFileAccepted)
+async def ingest_file_async(background_tasks: BackgroundTasks, file: UploadFile = File(...), meta: str = Form("{}")) -> KnowLoomFileAccepted:
+    try:
+        payload = KnowLoomFileMeta.model_validate_json(meta)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"invalid file metadata: {exc}") from exc
+    content = await file.read(20 * 1024 * 1024 + 1)
+    try:
+        await asyncio.to_thread(validate_upload, file.filename or "", content)
+    except FileTooLarge as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ScannedPdf as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    digest = sha256(content).hexdigest()
+    scope = to_scope(payload.scope)
+    repository = MySQLEntityRepository()
+    check = await asyncio.to_thread(repository.check_file_upload, scope=scope, file_sha256=digest, normalized_title=normalize_document_title(payload.title or (file.filename or "")))
+    if check.get("duplicate_of"):
+        duplicate = check["duplicate_of"]
+        return KnowLoomFileAccepted(job_id=0, document_id=int(duplicate["id"]), status="duplicate")
+    original_path = await asyncio.to_thread(persist_original_file, file.filename or "", content)
+    title = payload.title or Path(file.filename or "upload").stem
+    metadata = DocumentMetadata(doc_key=payload.doc_key or digest, title=title, doc_number=payload.doc_number, doc_kind=payload.doc_kind, issuer=payload.issuer, issuer_level=payload.issuer_level, audience=payload.audience, source_url=payload.source_url, published_at=payload.published_at, effective_at=payload.effective_at, original_file_path=original_path, file_sha256=digest, normalized_title=normalize_document_title(title))
+    created = await asyncio.to_thread(repository.create_file_ingest_job, scope=scope, file_name=file.filename or "upload", file_sha256=digest, original_file_path=original_path, metadata=metadata, extra_meta={"glossary":[item.model_dump() for item in payload.glossary], "relations":payload.relations})
+    background_tasks.add_task(process_file_ingest_job, int(created["job_id"]))
+    return KnowLoomFileAccepted(**created)
+
+
+@router.get("/ingest/file-jobs/{job_id}")
+async def get_file_ingest_job(job_id: int) -> dict[str, object]:
+    job = await asyncio.to_thread(MySQLEntityRepository().get_file_ingest_job, job_id)
+    if not job:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file ingest job not found")
+    job.pop("meta_json", None)
+    return job
+
+
+@router.post("/ingest-jobs/{job_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+async def retry_file_ingest_job(job_id: int, background_tasks: BackgroundTasks) -> dict[str, object]:
+    repository = MySQLEntityRepository()
+    changed = await asyncio.to_thread(repository.claim_file_ingest_retry, job_id)
+    if not changed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="file job is not retryable")
+    background_tasks.add_task(process_file_ingest_job, job_id)
+    return {"job_id": job_id, "status": "converting"}
+
+
 @router.post("/upload", response_model=KnowLoomIngestResponse)
 async def upload_file(file: UploadFile = File(...), task_name: str = "", title: str = "", doc_key: str = "", doc_number: str = "", doc_kind: str = "regulation", issuer: str = "", issuer_level: str = "university", audience: str = "", published_at: str = "", effective_at: str = "") -> KnowLoomIngestResponse:
     content = await file.read(20 * 1024 * 1024 + 1)
@@ -172,7 +261,7 @@ async def upload_file(file: UploadFile = File(...), task_name: str = "", title: 
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return await ingest_text(KnowLoomIngestRequest(text=conversion.text, note_id=doc_key, task_name=task_name, title=title or (file.filename or ""), doc_number=doc_number, doc_kind=doc_kind, issuer=issuer, issuer_level=issuer_level, audience=audience, published_at=published_at, effective_at=effective_at, original_file_path=original_path, page_map=conversion.page_map))
+    return await ingest_text(KnowLoomIngestRequest(text=conversion.text, note_id=doc_key, task_name=task_name, title=title or (file.filename or ""), doc_number=doc_number, doc_kind=doc_kind, issuer=issuer, issuer_level=issuer_level, audience=audience, published_at=published_at, effective_at=effective_at, original_file_path=original_path, page_map=conversion.page_map, file_sha256=__import__("hashlib").sha256(content).hexdigest()))
 
 @router.post("/ingest", response_model=KnowLoomIngestResponse)
 async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
@@ -208,9 +297,7 @@ async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
         for relation in detect_document_relations(request.text):
             target = await asyncio.to_thread(repository.find_document_by_title, scope=scope, title=relation.target_title)
             if target and str(target.get("doc_key") or "") != metadata.doc_key:
-                await asyncio.to_thread(repository.add_document_relation, scope, source_doc_key=metadata.doc_key, target_doc_key=str(target["doc_key"]), relation_type=relation.relation_type, confidence=relation.confidence, source="rule")
-                if relation.relation_type == "repeals":
-                    await asyncio.to_thread(repository.apply_document_repeal, scope, str(target["doc_key"]))
+                await asyncio.to_thread(repository.add_document_relation, scope, source_doc_key=metadata.doc_key, target_doc_key=str(target["doc_key"]), relation_type=relation.relation_type, confidence=relation.confidence, source="rule", evidence_text=relation.evidence)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -350,8 +437,39 @@ class DocumentRelationRequest(BaseModel):
 
 @router.post("/document-relations")
 async def add_document_relation(request: DocumentRelationRequest) -> dict[str, object]:
-    await asyncio.to_thread(MySQLEntityRepository().add_document_relation, to_scope(request.scope), source_doc_key=request.source_doc_key, target_doc_key=request.target_doc_key, relation_type=request.relation_type)
-    return {"status": "created", "relation_type": request.relation_type}
+    repository = MySQLEntityRepository()
+    scope = to_scope(request.scope)
+    relation_id = await asyncio.to_thread(repository.add_document_relation, scope, source_doc_key=request.source_doc_key, target_doc_key=request.target_doc_key, relation_type=request.relation_type)
+    changed_attributes = await asyncio.to_thread(repository.apply_document_repeal, scope, request.target_doc_key) if request.relation_type == "repeals" else []
+    return {"id": relation_id, "status": "active", "relation_type": request.relation_type, "changed_attribute_ids": changed_attributes}
+
+
+@router.get("/documents/{doc_key}/relations")
+async def list_document_relations(doc_key: str, workspace_id: str = "local", project_id: str = "knowloom", collection_id: str = "default", domain: str = "general") -> dict[str, object]:
+    scope = EntityScope(workspace_id=workspace_id, project_id=project_id, collection_id=collection_id, domain=domain)
+    relations = await asyncio.to_thread(MySQLEntityRepository().list_document_relations, scope, doc_key=doc_key)
+    return {"doc_key": doc_key, "relations": relations}
+
+
+@router.post("/document-relations/{relation_id}/confirm")
+async def confirm_document_relation(relation_id: int) -> dict[str, object]:
+    repository = MySQLEntityRepository()
+    relation = await asyncio.to_thread(repository.resolve_document_relation, relation_id, decision="confirm")
+    if not relation:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="relation is not pending")
+    changed: list[int] = []
+    if str(relation.get("relation_type")) == "repeals":
+        scope = EntityScope(workspace_id=str(relation["workspace_id"]), project_id=str(relation["project_id"]), collection_id=str(relation["collection_id"]), domain=str(relation["domain"]))
+        changed = await asyncio.to_thread(repository.apply_document_repeal, scope, str(relation["target_doc_key"]))
+    return {"id": relation_id, "status": "active", "changed_attribute_ids": changed}
+
+
+@router.post("/document-relations/{relation_id}/reject")
+async def reject_document_relation(relation_id: int) -> dict[str, object]:
+    relation = await asyncio.to_thread(MySQLEntityRepository().resolve_document_relation, relation_id, decision="reject")
+    if not relation:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="relation is not pending")
+    return {"id": relation_id, "status": "rejected"}
 
 
 class EntityIdentityUpdateRequest(BaseModel):
@@ -379,6 +497,22 @@ async def resolve_attribute_conflict(conflict_id: int, request: AttributeConflic
     if not changed:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conflict is no longer pending")
     return {"id": conflict_id, "status": "resolved", "resolution": request.resolution}
+
+
+class AttributeEventRevertRequest(BaseModel):
+    decided_by: str = "manual"
+
+
+@router.post("/attribute-events/{event_id}/revert")
+async def revert_attribute_event(event_id: int, request: AttributeEventRevertRequest) -> dict[str, object]:
+    try:
+        result = await asyncio.to_thread(MySQLEntityRepository().revert_attribute_event, event_id, decided_by=request.decided_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="event is not revertible or was already reverted")
+    await EntityIngestor().sync_attribute_indexes(list(result.get("changed_attribute_ids") or []))
+    return result
 
 
 @router.get("/review-tasks", response_model=KnowLoomReviewTaskListResponse)
@@ -473,4 +607,6 @@ def document_metadata_from_request(request: KnowLoomIngestRequest) -> DocumentMe
         effective_at=request.effective_at,
         original_file_path=request.original_file_path,
         page_map=request.page_map,
+        file_sha256=request.file_sha256,
+        normalized_title=normalize_document_title(request.title),
     )

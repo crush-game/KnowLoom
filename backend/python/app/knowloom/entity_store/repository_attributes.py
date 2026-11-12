@@ -494,6 +494,48 @@ class AttributeDecisionRepositoryMixin:
         return True
 
 
+    def revert_attribute_event(self, event_id: int, *, decided_by: str = "manual") -> dict[str, Any] | None:
+        with self.connect() as connection:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT * FROM knowloom_entity_attribute_events WHERE id=%s AND review_status IN ('auto_applied','approved') AND corrected_by_event_id IS NULL FOR UPDATE", (int(event_id),))
+                    event = cursor.fetchone()
+                    if not event:
+                        connection.rollback()
+                        return None
+                    action = str(event.get("action") or "")
+                    attribute_id = int(event["attribute_id"])
+                    candidate = json.loads(event.get("candidate_json") or "null") or {}
+                    target_id = int(candidate["attribute_id"]) if candidate.get("attribute_id") else None
+                    restored_id = attribute_id
+                    if action == "supersede":
+                        if target_id is None:
+                            raise ValueError("supersede event has no target attribute")
+                        cursor.execute("UPDATE knowloom_entity_attributes SET status='active', superseded_by=NULL, superseded_reason='' WHERE id=%s", (target_id,))
+                        cursor.execute("UPDATE knowloom_entity_attributes SET status='rejected' WHERE id=%s", (attribute_id,))
+                        restored_id = target_id
+                    elif action == "archive":
+                        cursor.execute("UPDATE knowloom_entity_attributes SET status='active', superseded_by=NULL, superseded_reason='' WHERE id=%s", (attribute_id,))
+                    elif action == "qualify":
+                        cursor.execute("UPDATE knowloom_entity_attributes SET status='rejected', qualifier='' WHERE id=%s", (attribute_id,))
+                        if target_id is not None:
+                            cursor.execute("UPDATE knowloom_entity_attributes SET qualifier='' WHERE id=%s", (target_id,))
+                    else:
+                        raise ValueError(f"event action {action} is not revertible")
+                    incoming = json.loads(event.get("incoming_json") or "{}")
+                    cursor.execute("""INSERT INTO knowloom_entity_attribute_events (entity_id, attribute_id, attr_type, action, review_status, before_json, after_json, incoming_json, candidate_json, diff_json, decision_reason, confidence, source, note_id, block_id, block_index)
+                        VALUES (%s,%s,%s,'revert','approved',%s,%s,%s,%s,%s,%s,1.0,'manual',%s,%s,%s)""",
+                        (event["entity_id"], restored_id, event["attr_type"], event.get("after_json"), event.get("before_json"), json.dumps(incoming, ensure_ascii=False), event.get("candidate_json"), json.dumps({"reverted_event_id": int(event_id), "original_action": action}, ensure_ascii=False), f"reverted by {decided_by[:128]}", str(event.get("note_id") or ""), str(event.get("block_id") or ""), int(event.get("block_index") or -1)))
+                    correction_id = int(cursor.lastrowid)
+                    cursor.execute("UPDATE knowloom_entity_attribute_events SET review_status='reverted', corrected_by_event_id=%s WHERE id=%s AND corrected_by_event_id IS NULL", (correction_id, int(event_id)))
+                    if getattr(cursor, "rowcount", 0) != 1:
+                        raise RuntimeError("event was reverted concurrently")
+                connection.commit()
+                return {"event_id": int(event_id), "correction_event_id": correction_id, "restored_attribute_id": restored_id, "original_action": action, "changed_attribute_ids": sorted({restored_id, attribute_id, *([target_id] if target_id is not None else [])})}
+            except Exception:
+                connection.rollback()
+                raise
+
     def mark_attribute_manually_confirmed(self, attribute_id: int) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:

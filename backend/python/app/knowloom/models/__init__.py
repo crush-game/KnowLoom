@@ -14,9 +14,11 @@ from app.knowloom.models.schemas import (
     KnowLoomQueryResult,
     KnowLoomPreprocessResult,
     ExtractedEntity,
+    ExtractedRelation,
     RetrievedEntity,
     StoredAttribute,
     StoredAttributeEvidence,
+    StoredEntityRelation,
     TextBlock,
 )
 
@@ -36,8 +38,10 @@ __all__ = [
     "KnowLoomQueryResult",
     "KnowLoomPreprocessResult",
     "ExtractedEntity",
+    "ExtractedRelation",
     "RetrievedEntity",
     "StoredAttribute",
     "StoredAttributeEvidence",
+    "StoredEntityRelation",
     "TextBlock",
 ]

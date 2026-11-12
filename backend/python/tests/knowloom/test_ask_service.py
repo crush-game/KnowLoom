@@ -22,3 +22,9 @@ class CitedAnswer:
 def test_ask_uses_valid_cited_llm_answer():
     answer=asyncio.run(KnowLoomAskService(query_service=Query(), repository=Blocks(), llm_client=CitedAnswer()).ask("学位申请条件"))
     assert answer.answer == "应完成规定课程。 [1]"
+
+from app.knowloom.services.ask import asks_for_handling
+
+def test_handling_questions_request_relation_expansion():
+    assert asks_for_handling("休学找谁办理")
+    assert not asks_for_handling("休学的定义是什么")

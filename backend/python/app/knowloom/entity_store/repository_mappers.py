@@ -5,6 +5,7 @@ from typing import Any
 from app.knowloom.entity_store.models import (
     CandidateEntity,
     EntityAttributeInput,
+    EntityRelationInput,
     EntityScope,
     IncomingEntity,
     IncomingEntityTask,
@@ -72,6 +73,7 @@ def row_to_incoming_task(row: dict[str, Any]) -> IncomingEntityTask:
         for item in json.loads(row.get("attributes_json") or "[]")
         if isinstance(item, dict)
     ]
+    relations = [EntityRelationInput(relation_type=str(item.get("relation_type") or ""), target_name=str(item.get("target_name") or ""), evidence=str(item.get("evidence") or ""), confidence=float(item.get("confidence") or 0.7), block_index=int(item.get("block_index") if item.get("block_index") is not None else -1), document_id=int(item["document_id"]) if item.get("document_id") is not None else None, block_ref_id=int(item["block_ref_id"]) if item.get("block_ref_id") is not None else None) for item in json.loads(row.get("relations_json") or "[]") if isinstance(item, dict)]
     incoming = IncomingEntity(
         name=str(row["name"]),
         normalized_name=str(row["normalized_name"]),
@@ -87,6 +89,7 @@ def row_to_incoming_task(row: dict[str, Any]) -> IncomingEntityTask:
         identity_source=str(row.get("identity_source") or "model_prior"),
         identity_user_text=str(row.get("identity_user_text") or ""),
         attributes=attributes,
+        relations=relations,
         description_for_match=str(row.get("description_for_match") or ""),
         source_count=int(row.get("source_count") or 1),
     )

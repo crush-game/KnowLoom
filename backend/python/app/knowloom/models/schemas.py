@@ -127,6 +127,18 @@ class EntityAdmissionJudgeScore(BaseModel):
         return " ".join(str(value or "").split())
 
 
+class ExtractedRelation(BaseModel):
+    type: str
+    target: str
+    evidence: str
+    confidence: float = Field(default=0.7, ge=0.0, le=1.0)
+
+    @field_validator("type", "target", "evidence")
+    @classmethod
+    def clean_relation_text(cls, value: str) -> str:
+        return " ".join(str(value or "").split())
+
+
 class ExtractedEntity(BaseModel):
     name: str
     entity_type: str = Field(default="concept")
@@ -140,6 +152,7 @@ class ExtractedEntity(BaseModel):
     admission_score: EntityAdmissionScore = Field(default_factory=EntityAdmissionScore)
     admission_judge: EntityAdmissionJudgeScore | None = None
     attributes: AttributeBucket = Field(default_factory=AttributeBucket)
+    relations: list[ExtractedRelation] = Field(default_factory=list)
 
     @field_validator("name", "entity_type", "identity_description")
     @classmethod
@@ -267,6 +280,17 @@ class StoredAttribute(BaseModel):
         return key if key in SLOTS else FALLBACK_SLOT
 
 
+class StoredEntityRelation(BaseModel):
+    id: int = 0
+    source_entity_id: int
+    target_name: str
+    target_entity_id: int | None = None
+    relation_type: str
+    confidence: float = 0.7
+    evidence: str = ""
+    dependency: bool = False
+
+
 class RetrievedEntity(BaseModel):
     id: int
     canonical_name: str
@@ -280,6 +304,7 @@ class RetrievedEntity(BaseModel):
     rank: int = 0
     source: str = ""
     attributes: list[StoredAttribute] = Field(default_factory=list)
+    relations: list[StoredEntityRelation] = Field(default_factory=list)
 
     def attributes_by_type(self, attr_type: str) -> list[StoredAttribute]:
         return [attribute for attribute in self.attributes if attribute.attr_type == attr_type]
@@ -292,6 +317,7 @@ class DependencyEdge(BaseModel):
     graph_type: Literal["semantic", "conditional"]
     evidence: str = ""
     weight: float = Field(default=1.0, ge=0.0)
+    dependency: bool = True
 
 
 class DependencyGraph(BaseModel):

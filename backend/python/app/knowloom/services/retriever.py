@@ -6,7 +6,8 @@ from app.knowloom.entity_store.normalizer import normalize_name
 from app.knowloom.entity_store.repository import MySQLEntityRepository
 from app.knowloom.indexes import EntityHybridIndex, KnowLoomEmbeddingClient
 from app.knowloom.indexes.entity_hybrid import reciprocal_rank_fusion_entities
-from app.knowloom.models import KnowLoomIndexSearchResult, RetrievedEntity, StoredAttribute
+from app.knowloom.constants import RELATIONS
+from app.knowloom.models import KnowLoomIndexSearchResult, RetrievedEntity, StoredAttribute, StoredEntityRelation
 
 
 class KnowLoomRetriever:
@@ -213,7 +214,10 @@ class KnowLoomRetriever:
             entity = self.repository.get_entity(candidate.entity.id) or candidate.entity
             stored_entities.append(entity)
 
-        attributes_by_entity = self.repository.list_attributes_for_entities([entity.id for entity in stored_entities])
+        entity_ids = [entity.id for entity in stored_entities]
+        attributes_by_entity = self.repository.list_attributes_for_entities(entity_ids)
+        relation_reader = getattr(self.repository, "list_entity_relations_for_entities", None)
+        relation_rows = relation_reader(entity_ids) if relation_reader is not None else {}
         retrieved: list[RetrievedEntity] = []
         score_by_id = {candidate.entity.id: candidate for candidate in candidates}
         for rank, entity in enumerate(stored_entities, start=1):
@@ -225,6 +229,7 @@ class KnowLoomRetriever:
                     score=candidate.score if candidate else 0.0,
                     rank=rank,
                     source=candidate.source if candidate else "",
+                    relations=[relation_from_row(row) for row in relation_rows.get(entity.id, [])],
                 )
             )
         return retrieved
@@ -279,6 +284,7 @@ def stored_entity_to_retrieved(
     score: float,
     rank: int,
     source: str,
+    relations: list[StoredEntityRelation] | None = None,
 ) -> RetrievedEntity:
     return RetrievedEntity(
         id=entity.id,
@@ -293,6 +299,7 @@ def stored_entity_to_retrieved(
         rank=rank,
         source=source,
         attributes=attributes,
+        relations=relations or [],
     )
 
 
@@ -318,3 +325,8 @@ def hydrate_candidates_from_maps(
 
 def elapsed_ms(started_at: float) -> float:
     return round((perf_counter() - started_at) * 1000, 2)
+
+
+def relation_from_row(row: dict) -> StoredEntityRelation:
+    relation_type = str(row.get("relation_type") or "")
+    return StoredEntityRelation(id=int(row.get("id") or 0), source_entity_id=int(row.get("source_entity_id") or 0), target_name=str(row.get("target_name") or ""), target_entity_id=int(row["target_entity_id"]) if row.get("target_entity_id") is not None else None, relation_type=relation_type, confidence=float(row.get("confidence") or 0.7), evidence=str(row.get("evidence") or ""), dependency=bool(RELATIONS.get(relation_type) and RELATIONS[relation_type].dependency))

@@ -5,7 +5,7 @@ from typing import Any
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.entity_store.alias_cache import EntityAliasCache, scope_hash
 from app.knowloom.entity_store.conflict_gate import AttributeWithSources, SourceInfo
-from app.knowloom.entity_store.models import AttributeRetrievalResult, CandidateEntity, EntityAttributeInput, EntityRelationMemoryRecord, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask, StoredEntity, StoredEntityAttribute
+from app.knowloom.entity_store.models import AttributeDecision, AttributeRetrievalResult, CandidateEntity, EntityAttributeInput, EntityRelationMemoryRecord, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask, StoredEntity, StoredEntityAttribute
 from app.knowloom.entity_store.normalizer import normalize_name, text_fingerprint
 from app.knowloom.entity_store.repository_attributes import AttributeDecisionRepositoryMixin
 from app.knowloom.entity_store.repository_ingest import IngestJobRepositoryMixin
@@ -322,6 +322,34 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 rows = cursor.fetchall()
         return group_attribute_rows(rows)
 
+    def related_entity_ids(self, source_entity_ids: list[int], *, relation_type: str, limit: int = 2) -> list[int]:
+        unique_ids = unique_ints(source_entity_ids)
+        if not unique_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(unique_ids))
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"SELECT DISTINCT target_entity_id FROM knowloom_entity_relations WHERE source_entity_id IN ({placeholders}) AND relation_type=%s AND status='active' AND target_entity_id IS NOT NULL LIMIT %s", (*unique_ids, relation_type, max(1, min(10, int(limit)))))
+                return [int(row["target_entity_id"]) for row in cursor.fetchall()]
+
+    def list_entity_relations_for_entities(self, entity_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+        unique_ids = unique_ints(entity_ids)
+        if not unique_ids:
+            return {}
+        placeholders = ", ".join(["%s"] * len(unique_ids))
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"""SELECT r.id, r.source_entity_id, r.target_name, r.target_entity_id, r.relation_type, r.confidence,
+                    GROUP_CONCAT(ev.evidence_text ORDER BY ev.id SEPARATOR ' | ') AS evidence
+                    FROM knowloom_entity_relations r LEFT JOIN knowloom_entity_relation_evidence ev ON ev.relation_id=r.id
+                    WHERE r.source_entity_id IN ({placeholders}) AND r.status='active'
+                    GROUP BY r.id ORDER BY r.source_entity_id, r.id""", tuple(unique_ids))
+                rows = cursor.fetchall()
+        grouped: dict[int, list[dict[str, Any]]] = {entity_id: [] for entity_id in unique_ids}
+        for row in rows:
+            grouped.setdefault(int(row["source_entity_id"]), []).append(row)
+        return grouped
+
     def count_active_attributes_by_type(self, entity_id: int, attr_types: list[str]) -> dict[str, int]:
         unique_types = unique_strings(attr_types, sort=False)
         if not unique_types:
@@ -440,7 +468,7 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 rows = cursor.fetchall()
         return [row_to_entity_attribute(row) for row in rows]
 
-    def get_active_attributes_by_ids(self, attribute_ids: list[int]) -> list[StoredEntityAttribute]:
+    def get_attributes_by_ids(self, attribute_ids: list[int]) -> list[StoredEntityAttribute]:
         unique_ids = sorted(unique_ints(attribute_ids))
         if not unique_ids:
             return []
@@ -465,11 +493,24 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                     FROM knowloom_entity_attributes a
                     INNER JOIN knowloom_entities e ON e.id = a.entity_id
                     WHERE a.id IN ({placeholders})
-                      AND a.status = 'active'
                     ORDER BY a.id
                     """,
                     tuple(unique_ids),
                 )
+                rows = cursor.fetchall()
+        return [row_to_entity_attribute(row) for row in rows]
+
+    def get_active_attributes_by_ids(self, attribute_ids: list[int]) -> list[StoredEntityAttribute]:
+        unique_ids = sorted(unique_ints(attribute_ids))
+        if not unique_ids:
+            return []
+        placeholders = ", ".join(["%s"] * len(unique_ids))
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(f"""SELECT a.id AS attribute_id, a.entity_id, e.workspace_id, e.project_id, e.collection_id, e.domain,
+                    a.attr_type, a.value_text, a.value_fingerprint, a.confidence, a.status
+                    FROM knowloom_entity_attributes a INNER JOIN knowloom_entities e ON e.id=a.entity_id
+                    WHERE a.id IN ({placeholders}) AND a.status = 'active' ORDER BY a.id""", tuple(unique_ids))
                 rows = cursor.fetchall()
         return [row_to_entity_attribute(row) for row in rows]
 
@@ -497,7 +538,7 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                     """
                     SELECT id, job_id, workspace_id, project_id, collection_id, domain,
                            name, normalized_name, entity_type, aliases_json,
-                           identity_description, identity_source, identity_user_text, description_for_match, attributes_json,
+                           identity_description, identity_source, identity_user_text, description_for_match, attributes_json, relations_json,
                            source_count, status, attempt_count
                     FROM knowloom_incoming_entities
                     WHERE id = %s
@@ -544,7 +585,8 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
         score: float = 0.0,
         reason: str = "",
         error: str = "",
-    ) -> None:
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -575,7 +617,13 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 job_id = int(row["job_id"]) if row else 0
                 if job_id:
                     update_ingest_job_status(cursor, job_id)
+                    cursor.execute("SELECT j.status, j.document_id FROM knowloom_ingest_jobs j WHERE j.id=%s", (job_id,))
+                    job = cursor.fetchone() or {}
+                    result = {"job_id": job_id, "status": str(job.get("status") or ""), "document_id": job.get("document_id")}
+                    if result["status"] == "completed":
+                        cursor.execute("UPDATE knowloom_file_ingest_jobs SET status='completed' WHERE ingest_job_id=%s AND status='queued'", (job_id,))
             connection.commit()
+        return result
 
     def mark_incoming_failure(self, incoming_entity_id: int, *, error: str, max_attempts: int) -> str:
         task = self.get_incoming_entity_task(incoming_entity_id)
@@ -1053,7 +1101,7 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
         scope = scope or scope_from_config(self.config)
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' AND workspace_id = %s AND project_id = %s AND collection_id = %s AND domain = %s LIMIT 1", (incoming_doc_key, target_doc_key, scope.workspace_id, scope.project_id, scope.collection_id, scope.domain))
+                cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' AND status='active' AND workspace_id = %s AND project_id = %s AND collection_id = %s AND domain = %s LIMIT 1", (incoming_doc_key, target_doc_key, scope.workspace_id, scope.project_id, scope.collection_id, scope.domain))
                 return cursor.fetchone() is not None
 
     def apply_document_repeal(self, scope: EntityScope, target_doc_key: str) -> list[int]:
@@ -1069,22 +1117,56 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 attribute_ids = [int(row["attribute_id"]) for row in cursor.fetchall()]
                 cursor.execute(f"UPDATE knowloom_documents SET status='repealed' WHERE id IN ({placeholders})", tuple(document_ids))
                 for attribute_id in attribute_ids:
-                    cursor.execute("""SELECT a.manually_confirmed, EXISTS(SELECT 1 FROM knowloom_entity_attribute_evidence e JOIN knowloom_documents d ON d.id=e.document_id WHERE e.attribute_id=a.id AND d.status='active') AS has_active_source FROM knowloom_entity_attributes a WHERE a.id=%s AND a.status='active' FOR UPDATE""", (attribute_id,))
+                    cursor.execute("""SELECT a.entity_id, a.attr_type, a.value_text, a.confidence, a.manually_confirmed, EXISTS(SELECT 1 FROM knowloom_entity_attribute_evidence e JOIN knowloom_documents d ON d.id=e.document_id WHERE e.attribute_id=a.id AND d.status='active') AS has_active_source FROM knowloom_entity_attributes a WHERE a.id=%s AND a.status='active' FOR UPDATE""", (attribute_id,))
                     row = cursor.fetchone()
-                    if not row or bool(row.get("manually_confirmed")) or bool(row.get("has_active_source")):
+                    if not row or bool(row.get("has_active_source")):
+                        continue
+                    if bool(row.get("manually_confirmed")):
+                        payload = {"attr_type": row["attr_type"], "value_text": row["value_text"], "evidence": "", "confidence": row.get("confidence") or 0.7}
+                        cursor.execute("""INSERT INTO knowloom_entity_attribute_conflicts (entity_id,attribute_id,attr_type,incoming_value_text,incoming_evidence,reason,confidence,kind,incoming_json,suggestion,status) VALUES (%s,%s,%s,%s,'','repealed',1.0,'temporal',%s,'keep_existing','pending')""", (row["entity_id"], attribute_id, row["attr_type"], row["value_text"], json.dumps(payload,ensure_ascii=False)))
                         continue
                     cursor.execute("UPDATE knowloom_entity_attributes SET status='superseded', superseded_by=NULL, superseded_reason='repealed' WHERE id=%s AND status='active'", (attribute_id,))
                     if getattr(cursor, "rowcount", 0) == 1:
+                        incoming = EntityAttributeInput(attr_type=str(row["attr_type"]), value_text=str(row["value_text"]), evidence="", confidence=float(row.get("confidence") or 0.7))
+                        decision = AttributeDecision(input_index=-1, action="archive", incoming_attribute=incoming, target_attribute_id=attribute_id, target_value_text=incoming.value_text, confidence=1.0, reason="source document repealed", source="sweeper")
+                        self._insert_attribute_event(cursor, entity_id=int(row["entity_id"]), attribute_id=attribute_id, decision=decision, before_snapshot=attribute_snapshot(attribute_id,incoming.attr_type,incoming.value_text,incoming.confidence), after_snapshot=attribute_snapshot(attribute_id,incoming.attr_type,incoming.value_text,incoming.confidence), evidence_added=0)
                         changed.append(attribute_id)
             connection.commit()
         return changed
 
-    def add_document_relation(self, scope: EntityScope, *, source_doc_key: str, target_doc_key: str, relation_type: str, confidence: float = 1.0, source: str = "manual") -> None:
-        if relation_type not in {"based_on", "amends", "repeals", "implements"}: raise ValueError("unsupported document relation")
+    def add_document_relation(self, scope: EntityScope, *, source_doc_key: str, target_doc_key: str, relation_type: str, confidence: float = 1.0, source: str = "manual", evidence_text: str = "", status: str | None = None) -> int:
+        if relation_type not in {"based_on", "amends", "repeals", "implements"}:
+            raise ValueError("unsupported document relation")
+        relation_status = status or ("pending" if source == "rule" and relation_type == "repeals" else "active")
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("INSERT INTO knowloom_document_relations (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type, confidence, source) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE confidence=VALUES(confidence), source=VALUES(source)", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, source_doc_key, target_doc_key, relation_type, confidence, source))
+                cursor.execute("""INSERT INTO knowloom_document_relations (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type, confidence, source, evidence_text, status)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id), confidence=VALUES(confidence), source=VALUES(source), evidence_text=VALUES(evidence_text), status=IF(status='rejected',status,VALUES(status))""",
+                    (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, source_doc_key, target_doc_key, relation_type, confidence, source, evidence_text, relation_status))
+                relation_id = int(cursor.lastrowid)
             connection.commit()
+        return relation_id
+
+    def list_document_relations(self, scope: EntityScope, *, doc_key: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT * FROM knowloom_document_relations WHERE workspace_id=%s AND project_id=%s AND collection_id=%s AND domain=%s AND (source_doc_key=%s OR target_doc_key=%s) ORDER BY id""", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, doc_key, doc_key))
+                return cursor.fetchall()
+
+    def resolve_document_relation(self, relation_id: int, *, decision: str) -> dict[str, Any] | None:
+        if decision not in {"confirm", "reject"}:
+            raise ValueError("unsupported document relation decision")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT * FROM knowloom_document_relations WHERE id=%s AND status='pending' FOR UPDATE", (int(relation_id),))
+                relation = cursor.fetchone()
+                if not relation:
+                    return None
+                cursor.execute("UPDATE knowloom_document_relations SET status=%s WHERE id=%s AND status='pending'", ("active" if decision == "confirm" else "rejected", int(relation_id)))
+            connection.commit()
+        return relation
+
 
     def update_identity(self, entity_id: int, *, text: str, source: str, trigger_reason: str, user_text: str = "") -> bool:
         if source not in {"user", "derived", "model_prior"}:

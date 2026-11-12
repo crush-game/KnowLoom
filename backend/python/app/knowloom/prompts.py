@@ -113,3 +113,9 @@ JSON 格式：
   "warnings": []
 }
 """.strip()
+
+# D-007 controlled relation contract is appended to the extraction prompt at import time.
+ENTITY_EXTRACTION_SYSTEM_PROMPT += """
+
+每个实体可选输出 relations。关系 type 只能是 is_a、part_of、handled_by、leads_to；target 和 evidence 必须逐字出现在当前 block 原文中，不能使用模型常识补关系。格式：relations:[{"type":"handled_by","target":"研究生院","evidence":"由研究生院受理","confidence":0.8}]。
+"""
