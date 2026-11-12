@@ -12,6 +12,7 @@ from app.knowloom.entity_store.worker import entity_worker_runtime_status
 from app.knowloom.entity_store.normalizer import text_fingerprint
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
+from app.knowloom.services.ask import KnowLoomAskService
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
 from app.knowloom.services.doc_meta import suggest_effective_at
@@ -41,6 +42,13 @@ class KnowLoomIngestRequest(BaseModel):
     source_url: str = ""
     published_at: str = ""
     effective_at: str = ""
+    scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
+
+
+class KnowLoomAskRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=500)
+    top_k_entities: int = Field(default=3, ge=1, le=10)
+    include_history: bool = False
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 
@@ -209,6 +217,14 @@ async def get_document_versions(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     return {"doc_key": doc_key, "versions": versions}
+
+
+@router.post("/ask")
+async def ask_question(request: KnowLoomAskRequest) -> dict[str, object]:
+    try:
+        return asdict(await KnowLoomAskService(scope=to_scope(request.scope)).ask(request.question, top_k_entities=request.top_k_entities, include_history=request.include_history))
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
 
 @router.post("/query", response_model=KnowLoomQueryResult)
