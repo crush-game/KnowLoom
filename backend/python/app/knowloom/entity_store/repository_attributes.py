@@ -347,7 +347,7 @@ class AttributeDecisionRepositoryMixin:
                 int(attribute_id),
                 attribute.attr_type,
                 decision.action,
-                "auto_applied" if decision.action in {"supersede", "archive", "qualify"} else "pending",
+                "approved" if decision.source == "manual" else ("auto_applied" if decision.action in {"supersede", "archive", "qualify"} else "pending"),
                 json.dumps(before_snapshot, ensure_ascii=False),
                 json.dumps(after_snapshot, ensure_ascii=False),
                 json.dumps(incoming_snapshot, ensure_ascii=False),
@@ -457,18 +457,41 @@ class AttributeDecisionRepositoryMixin:
             raise ValueError("unsupported conflict resolution")
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    UPDATE knowloom_entity_attribute_conflicts
-                    SET status = CASE WHEN %s = 'dismiss' THEN 'dismissed' ELSE 'resolved' END,
-                        resolution = %s, resolved_by = %s, resolved_at = CURRENT_TIMESTAMP
-                    WHERE id = %s AND status = 'pending'
-                    """,
-                    (resolution, resolution, decided_by[:128], int(conflict_id)),
-                )
-                changed = getattr(cursor, "rowcount", 1) == 1
+                cursor.execute("SELECT * FROM knowloom_entity_attribute_conflicts WHERE id=%s AND status='pending' FOR UPDATE", (int(conflict_id),))
+                conflict = cursor.fetchone()
+                if not conflict:
+                    return False
+                cursor.execute("""UPDATE knowloom_entity_attribute_conflicts SET status=CASE WHEN %s='dismiss' THEN 'dismissed' ELSE 'resolved' END,
+                    resolution=%s, resolved_by=%s, resolved_at=CURRENT_TIMESTAMP WHERE id=%s AND status='pending'""", (resolution, resolution, decided_by[:128], int(conflict_id)))
+                if getattr(cursor, "rowcount", 1) != 1:
+                    return False
+                target_id = int(conflict["attribute_id"])
+                entity_id = int(conflict["entity_id"])
+                payload = json.loads(conflict.get("incoming_json") or "{}")
+                incoming = EntityAttributeInput(attr_type=str(payload.get("attr_type") or conflict.get("attr_type") or "notes"), value_text=str(payload.get("value_text") or conflict.get("incoming_value_text") or ""), evidence=str(payload.get("evidence") or conflict.get("incoming_evidence") or ""), confidence=float(payload.get("confidence") or conflict.get("confidence") or 0.7), document_id=int(payload["document_id"]) if payload.get("document_id") is not None else None, block_ref_id=int(payload["block_ref_id"]) if payload.get("block_ref_id") is not None else None)
+                cursor.execute("SELECT value_text FROM knowloom_entity_attributes WHERE id=%s AND entity_id=%s FOR UPDATE", (target_id, entity_id))
+                target = cursor.fetchone() or {}
+                changed_attribute_id = target_id
+                action = "dismiss"
+                if resolution == "keep_existing":
+                    cursor.execute("UPDATE knowloom_entity_attributes SET manually_confirmed=1 WHERE id=%s", (target_id,))
+                    action = "keep_existing"
+                elif resolution in {"accept_incoming", "keep_both"}:
+                    qualifier = str(conflict.get("qualifier_incoming") or "") if resolution == "keep_both" else ""
+                    new_id, evidence_added = self._insert_attribute_from_input(cursor, entity_id, incoming, qualifier=qualifier)
+                    cursor.execute("UPDATE knowloom_entity_attributes SET manually_confirmed=1 WHERE id=%s", (new_id,))
+                    changed_attribute_id = new_id
+                    if resolution == "accept_incoming":
+                        cursor.execute("UPDATE knowloom_entity_attributes SET status='superseded', superseded_by=%s, superseded_reason='replaced' WHERE id=%s", (new_id, target_id))
+                        action = "accept_incoming"
+                    else:
+                        cursor.execute("UPDATE knowloom_entity_attributes SET manually_confirmed=1, qualifier=CASE WHEN qualifier='' THEN %s ELSE qualifier END WHERE id=%s", (str(conflict.get("qualifier_target") or ""), target_id))
+                        action = "keep_both"
+                    decision = AttributeDecision(input_index=-1, action="qualify" if resolution == "keep_both" else "supersede", incoming_attribute=incoming, target_attribute_id=target_id, target_value_text=str(target.get("value_text") or ""), confidence=float(conflict.get("confidence") or 0.0), reason=f"manual conflict resolution: {resolution}", source="manual")
+                    self._insert_attribute_event(cursor, entity_id=entity_id, attribute_id=changed_attribute_id, decision=decision, before_snapshot=attribute_snapshot(target_id, incoming.attr_type, str(target.get("value_text") or ""), incoming.confidence), after_snapshot=attribute_snapshot(changed_attribute_id, incoming.attr_type, incoming.value_text, incoming.confidence), evidence_added=evidence_added)
+                cursor.execute("UPDATE knowloom_entity_attribute_conflicts SET resolved_event_id=(SELECT MAX(id) FROM knowloom_entity_attribute_events WHERE entity_id=%s AND attribute_id=%s) WHERE id=%s", (entity_id, changed_attribute_id, int(conflict_id)))
             connection.commit()
-        return changed
+        return True
 
 
     def mark_attribute_manually_confirmed(self, attribute_id: int) -> None:
