@@ -4,7 +4,8 @@ from typing import Any
 
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.entity_store.alias_cache import EntityAliasCache, scope_hash
-from app.knowloom.entity_store.models import CandidateEntity, EntityAttributeInput, EntityRelationMemoryRecord, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask, StoredEntity, StoredEntityAttribute
+from app.knowloom.entity_store.conflict_gate import AttributeWithSources, SourceInfo
+from app.knowloom.entity_store.models import AttributeRetrievalResult, CandidateEntity, EntityAttributeInput, EntityRelationMemoryRecord, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask, StoredEntity, StoredEntityAttribute
 from app.knowloom.entity_store.normalizer import normalize_name, text_fingerprint
 from app.knowloom.entity_store.repository_attributes import AttributeDecisionRepositoryMixin
 from app.knowloom.entity_store.repository_ingest import IngestJobRepositoryMixin
@@ -1008,14 +1009,55 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
             evidence_count=evidence_count,
         )
 
-    def amends(self, incoming_doc_key: str, target_doc_key: str) -> bool:
+    def search_blocks(self, scope: EntityScope, query: str, *, limit: int = 8) -> list[dict[str, Any]]:
+        terms = [term for term in str(query).split() if len(term) > 1]
+        needle = terms[0] if terms else str(query).strip()
+        if not needle:
+            return []
         with self.connect() as connection:
             with connection.cursor() as cursor:
-                cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' LIMIT 1", (incoming_doc_key, target_doc_key))
+                cursor.execute("""SELECT b.id AS block_ref_id, b.l1_text, b.heading, d.title AS document_title, d.version_no AS document_version, d.doc_number, d.doc_kind, d.issuer, d.effective_at
+                    FROM knowloom_blocks b INNER JOIN knowloom_documents d ON d.id = b.document_id
+                    WHERE d.workspace_id = %s AND d.project_id = %s AND d.collection_id = %s AND d.domain = %s AND d.status = 'active' AND b.l1_text LIKE %s
+                    ORDER BY d.version_no DESC, b.id LIMIT %s""", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, f"%{needle}%", max(1, min(20, int(limit)))))
+                return cursor.fetchall()
+
+    def conflict_source_contexts(self, incoming_attributes: list[EntityAttributeInput], retrieval_results: list[AttributeRetrievalResult], scope: EntityScope) -> dict[int, tuple[SourceInfo | None, AttributeWithSources | None]]:
+        target_ids = [candidate.attribute_id for result in retrieval_results for candidate in result.candidates]
+        document_ids = [attribute.document_id for attribute in incoming_attributes if attribute.document_id]
+        documents: dict[int, SourceInfo] = {}
+        targets: dict[int, AttributeWithSources] = {}
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                if document_ids:
+                    placeholders = ", ".join(["%s"] * len(document_ids))
+                    cursor.execute(f"SELECT id, doc_key, version_no, doc_kind, issuer_level, published_at, effective_at, audience FROM knowloom_documents WHERE id IN ({placeholders})", tuple(document_ids))
+                    documents = {int(row["id"]): SourceInfo(doc_key=str(row["doc_key"]), version_no=int(row["version_no"]), doc_kind=str(row["doc_kind"]), issuer_level=str(row["issuer_level"]), published_at=row.get("published_at"), effective_at=row.get("effective_at"), audience=str(row.get("audience") or "")) for row in cursor.fetchall()}
+                if target_ids:
+                    placeholders = ", ".join(["%s"] * len(target_ids))
+                    cursor.execute(f"""SELECT a.id AS attribute_id, a.manually_confirmed, d.doc_key, d.version_no, d.doc_kind, d.issuer_level, d.published_at, d.effective_at, d.audience
+                        FROM knowloom_entity_attributes a LEFT JOIN knowloom_entity_attribute_evidence e ON e.attribute_id=a.id
+                        LEFT JOIN knowloom_documents d ON d.id=e.document_id
+                        WHERE a.id IN ({placeholders})""", tuple(target_ids))
+                    rows = cursor.fetchall()
+                    grouped: dict[int, list[SourceInfo]] = {}
+                    confirmed: dict[int, bool] = {}
+                    for row in rows:
+                        attr_id=int(row["attribute_id"]); confirmed[attr_id]=bool(row.get("manually_confirmed") or False)
+                        if row.get("doc_key"):
+                            grouped.setdefault(attr_id, []).append(SourceInfo(doc_key=str(row["doc_key"]), version_no=int(row.get("version_no") or 0), doc_kind=str(row.get("doc_kind") or "regulation"), issuer_level=str(row.get("issuer_level") or "university"), published_at=row.get("published_at"), effective_at=row.get("effective_at"), audience=str(row.get("audience") or "")))
+                    targets = {attr_id: AttributeWithSources(attribute_id=attr_id, manually_confirmed=confirmed.get(attr_id, False), sources=tuple(sources)) for attr_id, sources in grouped.items()}
+        return {index: (documents.get(attribute.document_id or -1), targets.get(result.candidates[0].attribute_id) if result.candidates else None) for index, (attribute, result) in enumerate(zip(incoming_attributes, retrieval_results))}
+
+    def amends(self, incoming_doc_key: str, target_doc_key: str, scope: EntityScope | None = None) -> bool:
+        scope = scope or scope_from_config(self.config)
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' AND workspace_id = %s AND project_id = %s AND collection_id = %s AND domain = %s LIMIT 1", (incoming_doc_key, target_doc_key, scope.workspace_id, scope.project_id, scope.collection_id, scope.domain))
                 return cursor.fetchone() is not None
 
     def add_document_relation(self, scope: EntityScope, *, source_doc_key: str, target_doc_key: str, relation_type: str, confidence: float = 1.0, source: str = "manual") -> None:
-        if relation_type not in {"amends", "repeals", "implements", "references"}: raise ValueError("unsupported document relation")
+        if relation_type not in {"based_on", "amends", "repeals", "implements"}: raise ValueError("unsupported document relation")
         with self.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("INSERT INTO knowloom_document_relations (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type, confidence, source) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE confidence=VALUES(confidence), source=VALUES(source)", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, source_doc_key, target_doc_key, relation_type, confidence, source))

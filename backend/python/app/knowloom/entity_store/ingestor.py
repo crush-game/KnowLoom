@@ -7,6 +7,7 @@ from app.knowloom.entity_store.attribute_decider import AttributeDecisionMaker
 from app.knowloom.entity_store.attribute_retriever import AttributeCandidateRetriever
 from app.knowloom.entity_store.models import DocumentMetadata, EntityIngestQueueResult, EntityResolutionDecision, EntityScope, EntityUpsertResult, IncomingEntity, IncomingEntityTask
 from app.knowloom.entity_store.normalizer import dedupe_extracted_entities, merge_unique, normalize_name
+from app.knowloom.entity_store.identity_writer import build_derived_identity
 from app.knowloom.entity_store.relation_memory import EntityRelationMemory
 from app.knowloom.entity_store.repository import MySQLEntityRepository
 from app.knowloom.entity_store.resolver import EntityResolver
@@ -21,6 +22,15 @@ LOW_SCORE_DIRECT_REJECT_THRESHOLD = 0.5
 class MemoryGuardedHybridPreview:
     incoming_entities: list[IncomingEntity]
     decisions: list[EntityResolutionDecision]
+
+
+class ScopedDocumentRelations:
+    def __init__(self, repository: Any, scope: EntityScope) -> None:
+        self.repository = repository
+        self.scope = scope
+
+    def amends(self, incoming_doc_key: str, target_doc_key: str) -> bool:
+        return bool(self.repository.amends(incoming_doc_key, target_doc_key, self.scope))
 
 
 class EntityIngestor:
@@ -169,6 +179,8 @@ class EntityIngestor:
             return "needs_review", decision
         if decision.decision == "new":
             return "new_created", decision
+        if decision.decision == "rejected":
+            return "rejected_admission", decision
         return "auto_merged" if results else "completed", decision
 
     async def manual_merge_review_task(
@@ -356,8 +368,10 @@ class EntityIngestor:
             if decision.matched_entity and decision.incoming.attributes:
                 retrieval_results = await self.attribute_retriever.retrieve(decision.matched_entity, decision.incoming.attributes)
                 decide_async = getattr(self.attribute_decider, "decide_async", None)
+                context_reader = getattr(self.repository, "conflict_source_contexts", None)
+                source_contexts = await asyncio.to_thread(context_reader, decision.incoming.attributes, retrieval_results, decision.incoming.scope) if context_reader is not None else {}
                 attribute_decisions = (
-                    await decide_async(decision.incoming.attributes, retrieval_results)
+                    await decide_async(decision.incoming.attributes, retrieval_results, source_contexts=source_contexts, relations=ScopedDocumentRelations(self.repository, decision.incoming.scope))
                     if decide_async is not None
                     else self.attribute_decider.decide(decision.incoming.attributes, retrieval_results)
                 )
@@ -371,6 +385,16 @@ class EntityIngestor:
                 result.conflict_count += apply_result.conflict_count
                 result.changed_attribute_ids = merge_ints(result.changed_attribute_ids, apply_result.changed_attribute_ids)
 
+            identity_draft = build_derived_identity(decision.incoming.name, decision.incoming.attributes)
+            identity_writer = getattr(self.repository, "update_identity", None)
+            if identity_draft is not None and identity_writer is not None:
+                await asyncio.to_thread(
+                    identity_writer,
+                    result.entity_id,
+                    text=identity_draft.text,
+                    source=identity_draft.source,
+                    trigger_reason=identity_draft.trigger_reason,
+                )
             stored = await asyncio.to_thread(self.repository.get_entity, result.entity_id)
             if stored is not None:
                 await asyncio.to_thread(self.repository.upsert_aliases_for_entity, stored, source=decision.decision, confidence=decision.score or 1.0)

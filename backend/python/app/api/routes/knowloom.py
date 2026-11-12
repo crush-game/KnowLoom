@@ -49,6 +49,7 @@ class KnowLoomIngestRequest(BaseModel):
 class KnowLoomAskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=500)
     top_k_entities: int = Field(default=3, ge=1, le=10)
+    top_k_blocks: int = Field(default=8, ge=1, le=20)
     include_history: bool = False
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
@@ -149,12 +150,12 @@ def debug_extract_payload(preprocess: KnowLoomPreprocessResult) -> dict[str, obj
 
 
 @router.post("/upload", response_model=KnowLoomIngestResponse)
-async def upload_file(file: UploadFile = File(...), task_name: str = "", title: str = "") -> KnowLoomIngestResponse:
+async def upload_file(file: UploadFile = File(...), task_name: str = "", title: str = "", doc_key: str = "", doc_number: str = "", doc_kind: str = "regulation", issuer: str = "", issuer_level: str = "university", audience: str = "", published_at: str = "", effective_at: str = "") -> KnowLoomIngestResponse:
     try:
         text = extract_file_text(file.filename or "", await file.read())
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return await ingest_text(KnowLoomIngestRequest(text=text, task_name=task_name, title=title or (file.filename or "")))
+    return await ingest_text(KnowLoomIngestRequest(text=text, note_id=doc_key, task_name=task_name, title=title or (file.filename or ""), doc_number=doc_number, doc_kind=doc_kind, issuer=issuer, issuer_level=issuer_level, audience=audience, published_at=published_at, effective_at=effective_at))
 
 
 @router.post("/ingest", response_model=KnowLoomIngestResponse)
@@ -232,7 +233,7 @@ async def get_document_versions(
 @router.post("/ask")
 async def ask_question(request: KnowLoomAskRequest) -> dict[str, object]:
     try:
-        return asdict(await KnowLoomAskService(scope=to_scope(request.scope)).ask(request.question, top_k_entities=request.top_k_entities, include_history=request.include_history))
+        return asdict(await KnowLoomAskService(scope=to_scope(request.scope)).ask(request.question, top_k_entities=request.top_k_entities, top_k_blocks=request.top_k_blocks, include_history=request.include_history))
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
@@ -319,7 +320,7 @@ async def list_attribute_conflicts(status_filter: str = Query("pending", alias="
 class DocumentRelationRequest(BaseModel):
     source_doc_key: str = Field(..., min_length=1)
     target_doc_key: str = Field(..., min_length=1)
-    relation_type: str = Field(..., pattern="^(amends|repeals|implements|references)$")
+    relation_type: str = Field(..., pattern="^(based_on|amends|repeals|implements)$")
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 

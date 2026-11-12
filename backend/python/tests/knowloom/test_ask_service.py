@@ -7,8 +7,11 @@ class Query:
         evidence=StoredAttributeEvidence(evidence_text="第十二条：应完成规定课程。", document_title="细则", document_version=2, block_ref_id=9)
         return KnowLoomQueryResult(query=name, retrieved_entities=[RetrievedEntity(id=1, canonical_name="学位申请", attributes=[StoredAttribute(id=3, attr_type="conditions", value_text="应完成规定课程。", evidence=[evidence])])])
 
+class Blocks:
+    def search_blocks(self, scope, query, *, limit): return []
+
 def test_ask_returns_cited_evidence_and_personal_boundary():
-    answer=asyncio.run(KnowLoomAskService(query_service=Query()).ask("我能申请学位吗"))
+    answer=asyncio.run(KnowLoomAskService(query_service=Query(), repository=Blocks()).ask("我能申请学位吗"))
     assert answer.personal_case is True
     assert "[1]" in answer.answer
     assert answer.citations[0]["block_ref_id"] == 9
