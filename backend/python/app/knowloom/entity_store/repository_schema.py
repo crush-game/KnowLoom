@@ -27,6 +27,7 @@ def ensure_entity_table_columns(cursor: Any) -> None:
     ensure_attribute_state_columns(cursor)
     ensure_attribute_conflict_columns(cursor)
     ensure_document_layer_schema(cursor)
+    ensure_identity_schema(cursor)
     ensure_incoming_entity_columns(cursor)
     ensure_review_table_indexes(cursor)
     ensure_attribute_decision_tables(cursor)
@@ -231,3 +232,26 @@ def ensure_attribute_decision_tables(cursor: Any) -> None:
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
         """
     )
+
+
+def ensure_identity_schema(cursor: Any) -> None:
+    cursor.execute("SHOW COLUMNS FROM knowloom_entities")
+    columns = {str(row["Field"]) for row in cursor.fetchall()}
+    additions = {
+        "identity_source": "ALTER TABLE knowloom_entities ADD COLUMN identity_source VARCHAR(16) NOT NULL DEFAULT 'model_prior' AFTER identity_description",
+        "identity_user_text": "ALTER TABLE knowloom_entities ADD COLUMN identity_user_text TEXT NULL AFTER identity_source",
+        "identity_basis_json": "ALTER TABLE knowloom_entities ADD COLUMN identity_basis_json JSON NULL AFTER identity_user_text",
+        "identity_updated_at": "ALTER TABLE knowloom_entities ADD COLUMN identity_updated_at TIMESTAMP NULL AFTER identity_basis_json",
+    }
+    for name, statement in additions.items():
+        if name not in columns:
+            cursor.execute(statement)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS knowloom_entity_identity_events (
+            id BIGINT PRIMARY KEY AUTO_INCREMENT, entity_id BIGINT NOT NULL, before_text TEXT NULL,
+            before_source VARCHAR(16) NOT NULL DEFAULT '', after_text TEXT NOT NULL,
+            after_source VARCHAR(16) NOT NULL, trigger_reason VARCHAR(64) NOT NULL, basis_json JSON NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_knowloom_identity_event_entity (entity_id),
+            CONSTRAINT fk_knowloom_identity_event_entity FOREIGN KEY (entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """)

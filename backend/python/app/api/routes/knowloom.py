@@ -290,6 +290,20 @@ async def list_attribute_conflicts(status_filter: str = Query("pending", alias="
     return {"conflicts": conflicts}
 
 
+class EntityIdentityUpdateRequest(BaseModel):
+    definition: str = Field(..., min_length=1, max_length=1000)
+
+
+@router.put("/entities/{entity_id}/identity")
+async def update_entity_identity(entity_id: int, request: EntityIdentityUpdateRequest) -> dict[str, object]:
+    from app.knowloom.entity_store.identity_writer import build_user_identity
+    draft = build_user_identity(request.definition)
+    changed = await asyncio.to_thread(MySQLEntityRepository().update_identity, entity_id, text=draft.text, source=draft.source, trigger_reason=draft.trigger_reason, user_text=draft.user_text)
+    if not changed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="entity not found or identity is protected")
+    return {"id": entity_id, "identity_description": draft.text, "identity_source": "user"}
+
+
 class AttributeConflictResolutionRequest(BaseModel):
     resolution: str
     decided_by: str = "manual"

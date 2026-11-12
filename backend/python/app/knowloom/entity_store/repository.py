@@ -1008,6 +1008,20 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
             evidence_count=evidence_count,
         )
 
+    def update_identity(self, entity_id: int, *, text: str, source: str, trigger_reason: str, user_text: str = "") -> bool:
+        if source not in {"user", "derived", "model_prior"}:
+            raise ValueError("unsupported identity source")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT identity_description, COALESCE(identity_source, 'model_prior') AS identity_source FROM knowloom_entities WHERE id = %s FOR UPDATE", (int(entity_id),))
+                before = cursor.fetchone()
+                if not before or (str(before.get("identity_source") or "model_prior") == "user" and source != "user"):
+                    return False
+                cursor.execute("UPDATE knowloom_entities SET identity_description = %s, description_for_match = %s, identity_source = %s, identity_user_text = %s, identity_updated_at = CURRENT_TIMESTAMP WHERE id = %s", (text, text, source, user_text or None, int(entity_id)))
+                cursor.execute("INSERT INTO knowloom_entity_identity_events (entity_id, before_text, before_source, after_text, after_source, trigger_reason) VALUES (%s, %s, %s, %s, %s, %s)", (int(entity_id), before.get("identity_description"), before.get("identity_source") or "model_prior", text, source, trigger_reason))
+            connection.commit()
+        return True
+
     def record_resolution_audit(self, incoming: IncomingEntity, decision: str, matched_entity_id: int | None, score: float, reason: str) -> None:
         with self.connect() as connection:
             with connection.cursor() as cursor:

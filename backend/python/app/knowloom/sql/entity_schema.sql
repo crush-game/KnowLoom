@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS knowloom_entities (
     entity_type VARCHAR(64) NOT NULL DEFAULT 'concept',
     aliases_json JSON NOT NULL,
     identity_description TEXT NOT NULL,
+    identity_source VARCHAR(16) NOT NULL DEFAULT 'model_prior',
+    identity_user_text TEXT NULL,
+    identity_basis_json JSON NULL,
+    identity_updated_at TIMESTAMP NULL,
     summary TEXT NOT NULL,
     description_for_match TEXT NOT NULL,
     embedding_json JSON NULL,
@@ -414,4 +418,19 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_attribute_conflicts (
     CONSTRAINT fk_knowloom_attr_conflict_attribute
         FOREIGN KEY (attribute_id) REFERENCES knowloom_entity_attributes(id)
         ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+
+CREATE TABLE IF NOT EXISTS knowloom_entity_identity_events (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    entity_id BIGINT NOT NULL,
+    before_text TEXT NULL,
+    before_source VARCHAR(16) NOT NULL DEFAULT '',
+    after_text TEXT NOT NULL,
+    after_source VARCHAR(16) NOT NULL,
+    trigger_reason VARCHAR(64) NOT NULL,
+    basis_json JSON NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_knowloom_identity_event_entity (entity_id),
+    CONSTRAINT fk_knowloom_identity_event_entity FOREIGN KEY (entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

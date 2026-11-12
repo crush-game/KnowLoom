@@ -58,6 +58,8 @@ class IncomingEntity:
     scope: EntityScope = field(default_factory=EntityScope)
     aliases: list[str] = field(default_factory=list)
     identity_description: str = ""
+    identity_source: str = "model_prior"
+    identity_user_text: str = ""
     attributes: list[EntityAttributeInput] = field(default_factory=list)
     description_for_match: str = ""
     source_count: int = 1
@@ -73,6 +75,8 @@ class StoredEntity:
     scope: EntityScope = field(default_factory=EntityScope)
     aliases: list[str] = field(default_factory=list)
     identity_description: str = ""
+    identity_source: str = "model_prior"
+    identity_user_text: str = ""
     summary: str = ""
     description_for_match: str = ""
     embedding: list[float] = field(default_factory=list)
