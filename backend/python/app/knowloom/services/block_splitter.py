@@ -1,11 +1,10 @@
 from time import perf_counter
 
-from pydantic import ValidationError
-
 from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.llm import KnowLoomLLMClient
 from app.knowloom.models import BlockSplitResult, TextBlock
 from app.knowloom.prompts import BLOCK_SPLIT_SYSTEM_PROMPT
+from app.knowloom.services.markdown_units import parse_units
 
 
 class BlockSplitter:
@@ -20,29 +19,15 @@ class BlockSplitter:
     async def split_with_timings(self, text: str) -> tuple[list[TextBlock], dict[str, float]]:
         timings: dict[str, float] = {}
         split_started_at = perf_counter()
-        data = await self.llm.chat_json(
-            system_prompt=BLOCK_SPLIT_SYSTEM_PROMPT,
-            user_payload={
-                "text": text,
-                "max_blocks": self.config.max_blocks,
-                "max_block_chars": self.config.max_block_chars,
-            },
-            operation_name="KnowLoom block split",
-        )
+        units = parse_units(text, max_unit_chars=self.config.max_block_chars)
+        # D-011: the code owns every source span; model grouping may be layered on later,
+        # but cannot rewrite or omit original text.
         timings["entity_anchor_split_ms"] = elapsed_ms(split_started_at)
-
-        try:
-            result = BlockSplitResult.model_validate(data)
-        except ValidationError as exc:
-            raise ValueError(f"block split result schema validation failed: {exc}") from exc
-
         normalize_started_at = perf_counter()
-        blocks = normalize_blocks(
-            result.blocks,
-            max_blocks=self.config.max_blocks,
-            max_block_chars=self.config.max_block_chars,
-            source_text=text,
-        )
+        blocks = [
+            TextBlock(block_index=index, heading=" / ".join(unit.heading_path) or f"Unit {unit.unit_id + 1}", anchor_entity="", candidate_entities=[], l1_text=unit.text, split_reason=f"unit_{unit.kind}", anchor_confidence=0.0, parent_block_index=None, chunk_index=0, chunk_count=1, char_start=unit.char_start, char_end=unit.char_end)
+            for index, unit in enumerate(units)
+        ]
         timings["physical_chunk_split_ms"] = elapsed_ms(normalize_started_at)
         if not blocks:
             raise ValueError("block split returned no usable blocks")
