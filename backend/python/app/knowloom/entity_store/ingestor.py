@@ -329,7 +329,7 @@ class EntityIngestor:
     async def _apply_one(self, decision: EntityResolutionDecision, semaphore: asyncio.Semaphore) -> EntityUpsertResult | None:
         async with semaphore:
             matched_id = decision.matched_entity.id if decision.matched_entity else None
-            if decision.decision == "ambiguous":
+            if decision.decision in {"ambiguous", "rejected"}:
                 await asyncio.to_thread(
                     self.repository.record_resolution_audit,
                     decision.incoming,

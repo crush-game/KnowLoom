@@ -145,14 +145,14 @@ class EntityResolver:
                 "stage": "deepseek_admission_guard",
                 "status": "ended" if admission_rejected else "continued",
                 "judge": admission,
-                "output_decision": "new" if admission_rejected else None,
+                "output_decision": "rejected" if admission_rejected else None,
             }
         )
         if admission_rejected:
             return finish(
                 EntityResolutionDecision(
                     incoming=incoming,
-                    decision="new",
+                    decision="rejected",
                     score=float(admission.get("confidence") or 0.0),
                     reason=str(admission.get("reason") or f"entity admission guard rejected as {admission['decision']}"),
                     candidates=[],
