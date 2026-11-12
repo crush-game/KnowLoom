@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import asdict
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 
 from app.knowloom.constants import attribute_schema_payload
@@ -13,6 +13,7 @@ from app.knowloom.entity_store.normalizer import text_fingerprint
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
 from app.knowloom.services.ask import KnowLoomAskService
+from app.knowloom.services.file_text import extract_file_text
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
 from app.knowloom.services.doc_meta import suggest_effective_at
@@ -145,6 +146,15 @@ def debug_extract_payload(preprocess: KnowLoomPreprocessResult) -> dict[str, obj
         "entity_extraction": payload["entity_extraction"],
         "timings": payload["timings"],
     }
+
+
+@router.post("/upload", response_model=KnowLoomIngestResponse)
+async def upload_file(file: UploadFile = File(...), task_name: str = "", title: str = "") -> KnowLoomIngestResponse:
+    try:
+        text = extract_file_text(file.filename or "", await file.read())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return await ingest_text(KnowLoomIngestRequest(text=text, task_name=task_name, title=title or (file.filename or "")))
 
 
 @router.post("/ingest", response_model=KnowLoomIngestResponse)
