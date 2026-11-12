@@ -1056,6 +1056,29 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                 cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' AND workspace_id = %s AND project_id = %s AND collection_id = %s AND domain = %s LIMIT 1", (incoming_doc_key, target_doc_key, scope.workspace_id, scope.project_id, scope.collection_id, scope.domain))
                 return cursor.fetchone() is not None
 
+    def apply_document_repeal(self, scope: EntityScope, target_doc_key: str) -> list[int]:
+        changed: list[int] = []
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""SELECT id FROM knowloom_documents WHERE workspace_id=%s AND project_id=%s AND collection_id=%s AND domain=%s AND doc_key=%s AND status='active' FOR UPDATE""", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, target_doc_key))
+                document_ids = [int(row["id"]) for row in cursor.fetchall()]
+                if not document_ids:
+                    return changed
+                placeholders = ", ".join(["%s"] * len(document_ids))
+                cursor.execute(f"SELECT DISTINCT attribute_id FROM knowloom_entity_attribute_evidence WHERE document_id IN ({placeholders})", tuple(document_ids))
+                attribute_ids = [int(row["attribute_id"]) for row in cursor.fetchall()]
+                cursor.execute(f"UPDATE knowloom_documents SET status='repealed' WHERE id IN ({placeholders})", tuple(document_ids))
+                for attribute_id in attribute_ids:
+                    cursor.execute("""SELECT a.manually_confirmed, EXISTS(SELECT 1 FROM knowloom_entity_attribute_evidence e JOIN knowloom_documents d ON d.id=e.document_id WHERE e.attribute_id=a.id AND d.status='active') AS has_active_source FROM knowloom_entity_attributes a WHERE a.id=%s AND a.status='active' FOR UPDATE""", (attribute_id,))
+                    row = cursor.fetchone()
+                    if not row or bool(row.get("manually_confirmed")) or bool(row.get("has_active_source")):
+                        continue
+                    cursor.execute("UPDATE knowloom_entity_attributes SET status='superseded', superseded_by=NULL, superseded_reason='repealed' WHERE id=%s AND status='active'", (attribute_id,))
+                    if getattr(cursor, "rowcount", 0) == 1:
+                        changed.append(attribute_id)
+            connection.commit()
+        return changed
+
     def add_document_relation(self, scope: EntityScope, *, source_doc_key: str, target_doc_key: str, relation_type: str, confidence: float = 1.0, source: str = "manual") -> None:
         if relation_type not in {"based_on", "amends", "repeals", "implements"}: raise ValueError("unsupported document relation")
         with self.connect() as connection:

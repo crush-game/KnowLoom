@@ -209,6 +209,8 @@ async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
             target = await asyncio.to_thread(repository.find_document_by_title, scope=scope, title=relation.target_title)
             if target and str(target.get("doc_key") or "") != metadata.doc_key:
                 await asyncio.to_thread(repository.add_document_relation, scope, source_doc_key=metadata.doc_key, target_doc_key=str(target["doc_key"]), relation_type=relation.relation_type, confidence=relation.confidence, source="rule")
+                if relation.relation_type == "repeals":
+                    await asyncio.to_thread(repository.apply_document_repeal, scope, str(target["doc_key"]))
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
