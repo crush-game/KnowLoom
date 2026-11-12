@@ -28,6 +28,7 @@ def ensure_entity_table_columns(cursor: Any) -> None:
     ensure_attribute_conflict_columns(cursor)
     ensure_document_layer_schema(cursor)
     ensure_identity_schema(cursor)
+    ensure_document_relation_schema(cursor)
     ensure_incoming_entity_columns(cursor)
     ensure_review_table_indexes(cursor)
     ensure_attribute_decision_tables(cursor)
@@ -253,5 +254,15 @@ def ensure_identity_schema(cursor: Any) -> None:
             after_source VARCHAR(16) NOT NULL, trigger_reason VARCHAR(64) NOT NULL, basis_json JSON NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, INDEX idx_knowloom_identity_event_entity (entity_id),
             CONSTRAINT fk_knowloom_identity_event_entity FOREIGN KEY (entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """)
+
+
+def ensure_document_relation_schema(cursor: Any) -> None:
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS knowloom_document_relations (
+            id BIGINT PRIMARY KEY AUTO_INCREMENT, workspace_id VARCHAR(128) NOT NULL DEFAULT 'local', project_id VARCHAR(128) NOT NULL DEFAULT 'knowloom', collection_id VARCHAR(128) NOT NULL DEFAULT 'default', domain VARCHAR(128) NOT NULL DEFAULT 'general',
+            source_doc_key VARCHAR(255) NOT NULL, target_doc_key VARCHAR(255) NOT NULL, relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 1.0, source VARCHAR(32) NOT NULL DEFAULT 'manual', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_knowloom_document_relation (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type), INDEX idx_knowloom_document_relation_target (target_doc_key, relation_type)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """)

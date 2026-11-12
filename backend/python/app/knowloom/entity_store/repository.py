@@ -1008,6 +1008,19 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
             evidence_count=evidence_count,
         )
 
+    def amends(self, incoming_doc_key: str, target_doc_key: str) -> bool:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1 FROM knowloom_document_relations WHERE source_doc_key = %s AND target_doc_key = %s AND relation_type = 'amends' LIMIT 1", (incoming_doc_key, target_doc_key))
+                return cursor.fetchone() is not None
+
+    def add_document_relation(self, scope: EntityScope, *, source_doc_key: str, target_doc_key: str, relation_type: str, confidence: float = 1.0, source: str = "manual") -> None:
+        if relation_type not in {"amends", "repeals", "implements", "references"}: raise ValueError("unsupported document relation")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("INSERT INTO knowloom_document_relations (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type, confidence, source) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE confidence=VALUES(confidence), source=VALUES(source)", (scope.workspace_id, scope.project_id, scope.collection_id, scope.domain, source_doc_key, target_doc_key, relation_type, confidence, source))
+            connection.commit()
+
     def update_identity(self, entity_id: int, *, text: str, source: str, trigger_reason: str, user_text: str = "") -> bool:
         if source not in {"user", "derived", "model_prior"}:
             raise ValueError("unsupported identity source")

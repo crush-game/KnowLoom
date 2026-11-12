@@ -434,3 +434,14 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_identity_events (
     INDEX idx_knowloom_identity_event_entity (entity_id),
     CONSTRAINT fk_knowloom_identity_event_entity FOREIGN KEY (entity_id) REFERENCES knowloom_entities(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS knowloom_document_relations (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    workspace_id VARCHAR(128) NOT NULL DEFAULT 'local', project_id VARCHAR(128) NOT NULL DEFAULT 'knowloom',
+    collection_id VARCHAR(128) NOT NULL DEFAULT 'default', domain VARCHAR(128) NOT NULL DEFAULT 'general',
+    source_doc_key VARCHAR(255) NOT NULL, target_doc_key VARCHAR(255) NOT NULL,
+    relation_type VARCHAR(32) NOT NULL, confidence DOUBLE NOT NULL DEFAULT 1.0, source VARCHAR(32) NOT NULL DEFAULT 'manual',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_knowloom_document_relation (workspace_id, project_id, collection_id, domain, source_doc_key, target_doc_key, relation_type),
+    INDEX idx_knowloom_document_relation_target (target_doc_key, relation_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

@@ -316,6 +316,19 @@ async def list_attribute_conflicts(status_filter: str = Query("pending", alias="
     return {"conflicts": conflicts}
 
 
+class DocumentRelationRequest(BaseModel):
+    source_doc_key: str = Field(..., min_length=1)
+    target_doc_key: str = Field(..., min_length=1)
+    relation_type: str = Field(..., pattern="^(amends|repeals|implements|references)$")
+    scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
+
+
+@router.post("/document-relations")
+async def add_document_relation(request: DocumentRelationRequest) -> dict[str, object]:
+    await asyncio.to_thread(MySQLEntityRepository().add_document_relation, to_scope(request.scope), source_doc_key=request.source_doc_key, target_doc_key=request.target_doc_key, relation_type=request.relation_type)
+    return {"status": "created", "relation_type": request.relation_type}
+
+
 class EntityIdentityUpdateRequest(BaseModel):
     definition: str = Field(..., min_length=1, max_length=1000)
 
