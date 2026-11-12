@@ -4,7 +4,7 @@ from typing import Literal
 
 ResolutionDecision = Literal["matched", "new", "ambiguous"]
 AttributeRetrievalMode = Literal["exact", "full_scan", "hybrid"]
-AttributeDecisionAction = Literal["merge", "enrich", "update", "conflict", "add", "review"]
+AttributeDecisionAction = Literal["merge", "enrich", "supersede", "archive", "qualify", "queue", "add", "review"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -97,6 +97,10 @@ class StoredEntityAttribute:
     value_fingerprint: str
     confidence: float = 0.7
     status: str = "active"
+    qualifier: str = ""
+    superseded_by: int | None = None
+    superseded_reason: str = ""
+    manually_confirmed: bool = False
 
 
 @dataclass(slots=True)
@@ -138,6 +142,11 @@ class AttributeDecision:
     new_value_text: str = ""
     confidence: float = 0.0
     reason: str = ""
+    kind: str = "review"
+    qualifier_incoming: str = ""
+    qualifier_target: str = ""
+    suggestion: str = ""
+    source: str = "auto"
 
 
 @dataclass(slots=True)

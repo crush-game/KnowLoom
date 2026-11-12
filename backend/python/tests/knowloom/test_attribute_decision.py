@@ -54,14 +54,14 @@ def candidate(attribute_id: int, attr_type: str, value: str, *, rank: int = 1) -
     )
 
 
-def test_attribute_decider_maps_retrieval_results_to_conservative_actions() -> None:
+def test_attribute_decider_uses_only_deterministic_prefilters_without_legacy_heuristics() -> None:
     decider = AttributeDecisionMaker()
     attrs = [
         incoming("procedure", "使用 SET NX EX 命令获取锁"),
         incoming("conditions", "如果业务执行时间超过锁 TTL，锁会提前释放，其他客户端可能获取同一资源的锁"),
         incoming("conditions", "单节点 Redis 分布式锁在主从切换时不会产生安全问题"),
-            incoming("notes", "实现成本低"),
-            incoming("purpose", "减少读写阻塞"),
+        incoming("notes", "实现成本低"),
+        incoming("purpose", "减少读写阻塞"),
     ]
     exact = stored(10, "procedure", "使用 SET NX EX 命令获取锁")
 
@@ -76,14 +76,9 @@ def test_attribute_decider_maps_retrieval_results_to_conservative_actions() -> N
         ],
     )
 
-    assert [decision.action for decision in decisions] == ["merge", "enrich", "conflict", "add", "add"]
+    assert [decision.action for decision in decisions] == ["merge", "add", "add", "add", "add"]
     assert decisions[0].target_attribute_id == 10
-    assert decisions[1].target_attribute_id == 20
-    assert decisions[1].new_value_text == "Redis 分布式锁可能出现锁过期问题：如果业务执行时间超过锁 TTL，锁会提前释放，其他客户端可能获取同一资源的锁"
-    assert decisions[2].target_attribute_id == 30
-    assert decisions[3].target_attribute_id is None
-    assert decisions[4].target_attribute_id is None
-    assert decisions[4].reason == "candidate is related but not proven to be the same fact"
+    assert {decision.source for decision in decisions[1:] if decision.reason != "no attribute candidate found"} == {"rule_fallback"}
 
 
 def test_attribute_decision_payload_limits_candidates_to_top5_and_removes_history_evidence() -> None:
@@ -236,7 +231,7 @@ def test_repository_applies_update_decision_and_records_before_after_event() -> 
         if "INSERT INTO knowloom_entity_attribute_events" in statement
     ][0]
     assert "UPDATE knowloom_entity_attributes" in "\n".join(statement for statement, _ in cursor.statements)
-    assert outcome.changed_attribute_ids == [50]
+    assert outcome.changed_attribute_ids == [41, 50]
     assert event_params[3] == "update"
     assert "通过 Undo Log 判断版本可见性" in event_params[5]
     assert "通过 Read View 判断版本可见性" in event_params[6]

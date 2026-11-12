@@ -355,7 +355,12 @@ class EntityIngestor:
             attribute_decisions = []
             if decision.matched_entity and decision.incoming.attributes:
                 retrieval_results = await self.attribute_retriever.retrieve(decision.matched_entity, decision.incoming.attributes)
-                attribute_decisions = self.attribute_decider.decide(decision.incoming.attributes, retrieval_results)
+                decide_async = getattr(self.attribute_decider, "decide_async", None)
+                attribute_decisions = (
+                    await decide_async(decision.incoming.attributes, retrieval_results)
+                    if decide_async is not None
+                    else self.attribute_decider.decide(decision.incoming.attributes, retrieval_results)
+                )
                 incoming_for_upsert = replace(decision.incoming, attributes=[])
 
             result = await asyncio.to_thread(self.repository.upsert_entity, incoming_for_upsert, matched_entity_id=matched_id)

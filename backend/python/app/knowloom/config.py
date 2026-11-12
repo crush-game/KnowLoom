@@ -33,6 +33,9 @@ class KnowLoomSettings(BaseSettings):
     entity_admission_judge_model: str = "deepseek-v4-flash-0731"
     entity_admission_judge_threshold: float = 0.7
 
+    attribute_decision_judge_enabled: bool = True
+    attribute_decision_judge_model: str = ""
+
     default_workspace_id: str = "local"
     default_project_id: str = "knowloom"
     default_collection_id: str = "default"

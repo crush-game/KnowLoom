@@ -30,11 +30,16 @@ CREATE TABLE IF NOT EXISTS knowloom_entity_attributes (
     value_fingerprint CHAR(64) NOT NULL,
     confidence DOUBLE NOT NULL DEFAULT 0.7,
     status VARCHAR(32) NOT NULL DEFAULT 'active',
+    qualifier VARCHAR(255) NOT NULL DEFAULT '',
+    superseded_by BIGINT NULL,
+    superseded_reason VARCHAR(32) NOT NULL DEFAULT '',
+    manually_confirmed TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uk_knowloom_entity_attr_fingerprint (entity_id, attr_type, value_fingerprint),
     INDEX idx_knowloom_entity_attributes_entity (entity_id),
     INDEX idx_knowloom_entity_attributes_type (attr_type),
+    INDEX idx_knowloom_entity_attributes_entity_type_status (entity_id, attr_type, status),
     CONSTRAINT fk_knowloom_entity_attributes_entity
         FOREIGN KEY (entity_id) REFERENCES knowloom_entities(id)
         ON DELETE CASCADE

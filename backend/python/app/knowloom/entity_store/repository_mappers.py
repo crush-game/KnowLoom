@@ -49,6 +49,10 @@ def row_to_entity_attribute(row: dict[str, Any]) -> StoredEntityAttribute:
         value_fingerprint=str(row.get("value_fingerprint") or ""),
         confidence=float(row.get("confidence") or 0.7),
         status=str(row.get("status") or "active"),
+        qualifier=str(row.get("qualifier") or ""),
+        superseded_by=int(row["superseded_by"]) if row.get("superseded_by") is not None else None,
+        superseded_reason=str(row.get("superseded_reason") or ""),
+        manually_confirmed=bool(row.get("manually_confirmed") or False),
     )
 
 

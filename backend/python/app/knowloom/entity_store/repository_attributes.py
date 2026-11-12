@@ -69,27 +69,53 @@ class AttributeDecisionRepositoryMixin:
                         evidence_added = self._insert_attribute_evidence(cursor, changed_id, attribute)
                         after_snapshot = attribute_snapshot(changed_id, attribute.attr_type, new_value_text, attribute.confidence)
                         outcome.evidence_count += evidence_added
-                    elif decision.action == "update" and decision.target_attribute_id:
+                    elif decision.action in {"supersede", "update"} and decision.target_attribute_id:
                         changed_id = int(decision.target_attribute_id)
-                        event_attribute_id = changed_id
-                        new_value_text = decision.new_value_text or attribute.value_text
                         before_snapshot = attribute_snapshot(changed_id, attribute.attr_type, decision.target_value_text, attribute.confidence)
+                        new_id, evidence_added = self._insert_attribute_from_input(cursor, entity_id, attribute)
                         cursor.execute(
                             """
                             UPDATE knowloom_entity_attributes
-                            SET value_text = %s,
-                                value_fingerprint = %s,
-                                confidence = GREATEST(confidence, %s),
+                            SET status = 'superseded', superseded_by = %s, superseded_reason = 'replaced',
                                 updated_at = CURRENT_TIMESTAMP
-                            WHERE id = %s AND entity_id = %s AND status = 'active'
+                            WHERE id = %s AND entity_id = %s AND status = 'active' AND manually_confirmed = 0
                             """,
-                            (new_value_text, text_fingerprint(new_value_text), attribute.confidence, changed_id, int(entity_id)),
+                            (new_id, changed_id, int(entity_id)),
                         )
+                        if getattr(cursor, "rowcount", 1) != 1:
+                            raise RuntimeError(f"attribute state changed: {changed_id}")
+                        event_attribute_id = new_id
+                        after_snapshot = attribute_snapshot(new_id, attribute.attr_type, attribute.value_text, attribute.confidence)
                         outcome.attribute_count += 1
-                        evidence_added = self._insert_attribute_evidence(cursor, changed_id, attribute)
-                        after_snapshot = attribute_snapshot(changed_id, attribute.attr_type, new_value_text, attribute.confidence)
                         outcome.evidence_count += evidence_added
-                    elif decision.action == "conflict" and decision.target_attribute_id:
+                        outcome.changed_attribute_ids.extend([new_id, changed_id])
+                    elif decision.action == "archive" and decision.target_attribute_id:
+                        changed_id = int(decision.target_attribute_id)
+                        new_id, evidence_added = self._insert_attribute_from_input(
+                            cursor, entity_id, attribute, status="superseded", superseded_by=changed_id, superseded_reason="archived"
+                        )
+                        event_attribute_id = new_id
+                        before_snapshot = attribute_snapshot(changed_id, attribute.attr_type, decision.target_value_text, attribute.confidence)
+                        after_snapshot = attribute_snapshot(new_id, attribute.attr_type, attribute.value_text, attribute.confidence)
+                        outcome.attribute_count += 1
+                        outcome.evidence_count += evidence_added
+                        outcome.changed_attribute_ids.extend([new_id, changed_id])
+                    elif decision.action == "qualify" and decision.target_attribute_id:
+                        changed_id = int(decision.target_attribute_id)
+                        new_id, evidence_added = self._insert_attribute_from_input(
+                            cursor, entity_id, attribute, qualifier=decision.qualifier_incoming
+                        )
+                        cursor.execute(
+                            "UPDATE knowloom_entity_attributes SET qualifier = %s WHERE id = %s AND entity_id = %s AND status = 'active' AND qualifier = ''",
+                            (decision.qualifier_target, changed_id, int(entity_id)),
+                        )
+                        event_attribute_id = new_id
+                        before_snapshot = attribute_snapshot(changed_id, attribute.attr_type, decision.target_value_text, attribute.confidence)
+                        after_snapshot = attribute_snapshot(new_id, attribute.attr_type, attribute.value_text, attribute.confidence)
+                        outcome.attribute_count += 1
+                        outcome.evidence_count += evidence_added
+                        outcome.changed_attribute_ids.extend([new_id, changed_id])
+                    elif decision.action in {"queue", "conflict"} and decision.target_attribute_id:
                         event_attribute_id = int(decision.target_attribute_id)
                         before_snapshot = attribute_snapshot(event_attribute_id, attribute.attr_type, decision.target_value_text, attribute.confidence)
                         after_snapshot = before_snapshot
@@ -155,19 +181,21 @@ class AttributeDecisionRepositoryMixin:
             }
         return summaries
 
-    def _insert_attribute_from_input(self, cursor: Any, entity_id: int, attribute: EntityAttributeInput) -> tuple[int, int]:
+    def _insert_attribute_from_input(
+        self, cursor: Any, entity_id: int, attribute: EntityAttributeInput, *, status: str = "active", qualifier: str = "", superseded_by: int | None = None, superseded_reason: str = ""
+    ) -> tuple[int, int]:
         value_fingerprint = text_fingerprint(attribute.value_text)
         cursor.execute(
             """
             INSERT INTO knowloom_entity_attributes (
-                entity_id, attr_type, value_text, value_fingerprint, confidence
+                entity_id, attr_type, value_text, value_fingerprint, confidence, status, qualifier, superseded_by, superseded_reason
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
                 confidence = GREATEST(confidence, VALUES(confidence)),
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (entity_id, attribute.attr_type, attribute.value_text, value_fingerprint, attribute.confidence),
+            (entity_id, attribute.attr_type, attribute.value_text, value_fingerprint, attribute.confidence, status, qualifier, superseded_by, superseded_reason),
         )
         cursor.execute(
             """
@@ -215,9 +243,10 @@ class AttributeDecisionRepositoryMixin:
             """
             INSERT INTO knowloom_entity_attribute_conflicts (
                 entity_id, attribute_id, attr_type, incoming_value_text,
-                incoming_evidence, reason, confidence, status
+                incoming_evidence, reason, confidence, kind, incoming_json, suggestion,
+                qualifier_incoming, qualifier_target, status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending')
             """,
             (
                 int(entity_id),
@@ -227,6 +256,11 @@ class AttributeDecisionRepositoryMixin:
                 attribute.evidence,
                 decision.reason,
                 decision.confidence,
+                decision.kind,
+                json.dumps({"attr_type": attribute.attr_type, "value_text": attribute.value_text, "evidence": attribute.evidence, "confidence": attribute.confidence, "document_id": attribute.document_id, "block_ref_id": attribute.block_ref_id}, ensure_ascii=False),
+                decision.suggestion,
+                decision.qualifier_incoming,
+                decision.qualifier_target,
             ),
         )
 
@@ -306,14 +340,14 @@ class AttributeDecisionRepositoryMixin:
                 decision_reason, confidence, source,
                 note_id, block_id, block_index
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'auto', %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 int(entity_id),
                 int(attribute_id),
                 attribute.attr_type,
                 decision.action,
-                "pending",
+                "auto_applied" if decision.action in {"supersede", "archive", "qualify"} else "pending",
                 json.dumps(before_snapshot, ensure_ascii=False),
                 json.dumps(after_snapshot, ensure_ascii=False),
                 json.dumps(incoming_snapshot, ensure_ascii=False),
@@ -321,6 +355,7 @@ class AttributeDecisionRepositoryMixin:
                 json.dumps(diff, ensure_ascii=False),
                 decision.reason,
                 decision.confidence,
+                decision.source,
                 attribute.note_id,
                 attribute.block_id,
                 attribute.block_index,
@@ -394,3 +429,50 @@ class AttributeDecisionRepositoryMixin:
                 evidence_added=1 if attribute.evidence else 0,
             )
         return attribute_count, evidence_count
+
+    def list_attribute_conflicts(self, *, status: str = "pending", entity_id: int | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        clauses = ["status = %s"]
+        values: list[Any] = [status]
+        if entity_id is not None:
+            clauses.append("entity_id = %s")
+            values.append(int(entity_id))
+        values.append(max(1, min(200, int(limit))))
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT id, entity_id, attribute_id, attr_type, incoming_value_text, incoming_evidence,
+                           reason, confidence, kind, suggestion, qualifier_incoming, qualifier_target,
+                           status, resolution, resolved_by, resolved_at, created_at
+                    FROM knowloom_entity_attribute_conflicts
+                    WHERE {' AND '.join(clauses)}
+                    ORDER BY id DESC LIMIT %s
+                    """,
+                    tuple(values),
+                )
+                return cursor.fetchall()
+
+    def resolve_attribute_conflict(self, conflict_id: int, *, resolution: str, decided_by: str = "manual") -> bool:
+        if resolution not in {"accept_incoming", "keep_existing", "keep_both", "dismiss"}:
+            raise ValueError("unsupported conflict resolution")
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE knowloom_entity_attribute_conflicts
+                    SET status = CASE WHEN %s = 'dismiss' THEN 'dismissed' ELSE 'resolved' END,
+                        resolution = %s, resolved_by = %s, resolved_at = CURRENT_TIMESTAMP
+                    WHERE id = %s AND status = 'pending'
+                    """,
+                    (resolution, resolution, decided_by[:128], int(conflict_id)),
+                )
+                changed = getattr(cursor, "rowcount", 1) == 1
+            connection.commit()
+        return changed
+
+
+    def mark_attribute_manually_confirmed(self, attribute_id: int) -> None:
+        with self.connect() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("UPDATE knowloom_entity_attributes SET manually_confirmed = 1 WHERE id = %s", (int(attribute_id),))
+            connection.commit()

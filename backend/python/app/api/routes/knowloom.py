@@ -284,6 +284,25 @@ async def get_worker_status() -> dict[str, object]:
     return response
 
 
+@router.get("/attribute-conflicts")
+async def list_attribute_conflicts(status_filter: str = Query("pending", alias="status"), entity_id: int | None = None, limit: int = 50) -> dict[str, object]:
+    conflicts = await asyncio.to_thread(MySQLEntityRepository().list_attribute_conflicts, status=status_filter, entity_id=entity_id, limit=limit)
+    return {"conflicts": conflicts}
+
+
+class AttributeConflictResolutionRequest(BaseModel):
+    resolution: str
+    decided_by: str = "manual"
+
+
+@router.post("/attribute-conflicts/{conflict_id}/resolve")
+async def resolve_attribute_conflict(conflict_id: int, request: AttributeConflictResolutionRequest) -> dict[str, object]:
+    changed = await asyncio.to_thread(MySQLEntityRepository().resolve_attribute_conflict, conflict_id, resolution=request.resolution, decided_by=request.decided_by)
+    if not changed:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="conflict is no longer pending")
+    return {"id": conflict_id, "status": "resolved", "resolution": request.resolution}
+
+
 @router.get("/review-tasks", response_model=KnowLoomReviewTaskListResponse)
 async def list_review_tasks(status_filter: str = Query("pending", alias="status"), limit: int = 50) -> KnowLoomReviewTaskListResponse:
     ingestor = EntityIngestor()

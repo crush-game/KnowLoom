@@ -72,3 +72,7 @@ def attribute_schema_payload() -> dict[str, object]:
         ],
         "entity_types": {entity_type: list(slots_for(entity_type)) for entity_type in ENTITY_TYPES},
     }
+
+ISSUER_LEVEL = {"national": 3, "university": 2, "department": 1}
+AUTO_TEMPORAL_MIN_CONFIDENCE = 0.8
+AUTO_CONTEXTUAL_MIN_CONFIDENCE = 0.7

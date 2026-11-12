@@ -162,7 +162,7 @@ def test_repository_exact_lookup_filters_unrequested_type_fingerprint_pairs() ->
     assert matches[("definition", "fp-a")].id == 1
     assert matches[("constraints", "fp-b")].id == 2
     query, params = cursor.statements[0]
-    assert "status = 'active'" in query
+    assert "status IN ('active', 'superseded')" in query
     assert params == (3, "constraints", "definition", "fp-a", "fp-b")
 
 

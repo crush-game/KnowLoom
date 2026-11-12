@@ -24,6 +24,8 @@ def ensure_entity_table_columns(cursor: Any) -> None:
     ensure_index(cursor, "knowloom_entities", "idx_knowloom_entities_scope_name", "workspace_id, project_id, collection_id, domain, normalized_name")
     ensure_resolution_audit_scope_columns(cursor)
     ensure_ingest_job_columns(cursor)
+    ensure_attribute_state_columns(cursor)
+    ensure_attribute_conflict_columns(cursor)
     ensure_document_layer_schema(cursor)
     ensure_incoming_entity_columns(cursor)
     ensure_review_table_indexes(cursor)
@@ -60,6 +62,45 @@ def ensure_ingest_job_columns(cursor: Any) -> None:
         if column not in existing_columns:
             cursor.execute(statement)
 
+
+
+
+def ensure_attribute_state_columns(cursor: Any) -> None:
+    cursor.execute("SHOW COLUMNS FROM knowloom_entity_attributes")
+    columns = {str(row["Field"]) for row in cursor.fetchall()}
+    additions = {
+        "qualifier": "ALTER TABLE knowloom_entity_attributes ADD COLUMN qualifier VARCHAR(255) NOT NULL DEFAULT '' AFTER status",
+        "superseded_by": "ALTER TABLE knowloom_entity_attributes ADD COLUMN superseded_by BIGINT NULL AFTER qualifier",
+        "superseded_reason": "ALTER TABLE knowloom_entity_attributes ADD COLUMN superseded_reason VARCHAR(32) NOT NULL DEFAULT '' AFTER superseded_by",
+        "manually_confirmed": "ALTER TABLE knowloom_entity_attributes ADD COLUMN manually_confirmed TINYINT(1) NOT NULL DEFAULT 0 AFTER superseded_reason",
+    }
+    for name, statement in additions.items():
+        if name not in columns:
+            cursor.execute(statement)
+    ensure_index(cursor, "knowloom_entity_attributes", "idx_knowloom_entity_attributes_entity_type_status", "entity_id, attr_type, status")
+
+
+
+def ensure_attribute_conflict_columns(cursor: Any) -> None:
+    cursor.execute("SHOW TABLES LIKE 'knowloom_entity_attribute_conflicts'")
+    if not cursor.fetchone():
+        return
+    cursor.execute("SHOW COLUMNS FROM knowloom_entity_attribute_conflicts")
+    columns = {str(row["Field"]) for row in cursor.fetchall()}
+    additions = {
+        "kind": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT 'factual' AFTER confidence",
+        "incoming_json": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN incoming_json JSON NULL AFTER kind",
+        "suggestion": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN suggestion VARCHAR(32) NOT NULL DEFAULT '' AFTER incoming_json",
+        "qualifier_incoming": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN qualifier_incoming VARCHAR(255) NOT NULL DEFAULT '' AFTER suggestion",
+        "qualifier_target": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN qualifier_target VARCHAR(255) NOT NULL DEFAULT '' AFTER qualifier_incoming",
+        "resolution": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN resolution VARCHAR(32) NOT NULL DEFAULT '' AFTER qualifier_target",
+        "resolved_by": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN resolved_by VARCHAR(128) NOT NULL DEFAULT '' AFTER resolution",
+        "resolved_at": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN resolved_at TIMESTAMP NULL AFTER resolved_by",
+        "resolved_event_id": "ALTER TABLE knowloom_entity_attribute_conflicts ADD COLUMN resolved_event_id BIGINT NULL AFTER resolved_at",
+    }
+    for name, statement in additions.items():
+        if name not in columns:
+            cursor.execute(statement)
 
 
 def ensure_document_layer_schema(cursor: Any) -> None:

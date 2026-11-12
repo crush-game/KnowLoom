@@ -1,88 +1,56 @@
+from __future__ import annotations
+
 from typing import Any
 
+from app.knowloom.config import KnowLoomSettings, settings
 from app.knowloom.constants import slot_spec
-from app.knowloom.entity_store.models import (
-    AttributeCandidate,
-    AttributeDecision,
-    AttributeRetrievalResult,
-    EntityAttributeInput,
-)
+from app.knowloom.entity_store.conflict_gate import AttributeWithSources, NoDocumentRelations, SourceInfo, contextual_outcome, temporal_outcome
+from app.knowloom.entity_store.models import AttributeDecision, AttributeRetrievalResult, EntityAttributeInput
+from app.knowloom.llm.client import KnowLoomLLMClient
 
-NEGATION_MARKERS = ("不会", "不能", "不是", "无需", "不需要", "没有", "无", "not", "never", "no ")
-DETAIL_MARKERS = ("如果", "因为", "导致", "从而", "通过", "需要", "当", "：", ":", "，")
-UPDATE_MARKERS = ("改为", "替代", "更新为", "应为", "应该是", "修正为", "不再")
 MAX_ATTRIBUTE_DECISION_CANDIDATES = 5
 ATTRIBUTE_DECISION_SYSTEM_PROMPT = """
-你是 KnowLoom 的属性合并裁判。你需要判断 incoming attribute 是否应该并入某个已有 attribute。
+你是 KnowLoom 的学校规章制度属性合并裁判。判断新属性和候选属性的关系，不能根据常识编造来源。
 
-动作定义：
-- add: incoming 是新知识点，应新增属性。
-- merge: incoming 与某个候选表达同一事实，只追加 evidence，不改 value_text。
-- enrich: incoming 是某个候选同一事实的补充细节，可以扩写 value_text。
-- update: incoming 明显替代或修正某个候选的旧值。
-- conflict: incoming 与某个候选冲突，不能覆盖，记录冲突。
-- review: 信息不足或风险高，需要人工审核。
+动作：
+- add：新知识点；
+- merge：同一事实，仅合并证据；
+- enrich：同一规定的更完整表述，new_value_text 必须给出完整替换文本；
+- update：新规定取代曾经有效的旧规定；
+- conflict：两条说法冲突，必须给出 kind；
+- review：信息不足，人工审核。
 
-严格规则：
-- attr_type 相同不代表可以 merge。
-- 语义相关不代表同一事实。
-- 如果不是同一事实，必须 add。
-- 如果不确定，必须 review。
-- 只能从候选列表中选择 target_attribute_id。
-- 历史摘要只用于风险判断，不要编造历史或候选。
+kind 只能是 temporal、contextual、factual：
+- temporal 是版本、修订或施行时间造成的新旧替代；
+- contextual 是年级、学生类别、学院等适用范围不同，两条都可成立；
+- factual 是至少一条可能错误或无法从材料判断。
 
-只输出 JSON。
+严格规则：attr_type 相同或语义相关不等于同一事实；target_attribute_id 必须来自该属性提供的 candidates；不确定就 review。只输出 JSON：{"decisions":[...]}。
 """.strip()
 
 
 class AttributeDecisionMaker:
-    def decide(
+    """Run only deterministic prefilters locally; delegate semantic relationships to the judge."""
+
+    def __init__(self, *, llm_client: Any | None = None, config: KnowLoomSettings = settings) -> None:
+        self.config = config
+        self.llm_client = llm_client or KnowLoomLLMClient(config)
+
+    def prefilter(
         self,
         incoming_attributes: list[EntityAttributeInput],
         retrieval_results: list[AttributeRetrievalResult],
-    ) -> list[AttributeDecision]:
+    ) -> tuple[list[AttributeDecision], list[tuple[int, EntityAttributeInput, AttributeRetrievalResult]]]:
         results_by_index = {result.input_index: result for result in retrieval_results}
-        decisions: list[AttributeDecision] = []
+        resolved: list[AttributeDecision] = []
+        pending: list[tuple[int, EntityAttributeInput, AttributeRetrievalResult]] = []
         for input_index, attribute in enumerate(incoming_attributes):
             result = results_by_index.get(input_index)
-            if slot_spec(attribute.attr_type).merge_policy == "append":
-                if result is not None and result.exact_match is not None:
-                    decisions.append(
-                        AttributeDecision(
-                            input_index=input_index,
-                            action="merge",
-                            incoming_attribute=attribute,
-                            target_attribute_id=result.exact_match.id,
-                            target_value_text=result.exact_match.value_text,
-                            confidence=1.0,
-                            reason="exact fingerprint match for append slot",
-                        )
-                    )
-                else:
-                    decisions.append(
-                        AttributeDecision(
-                            input_index=input_index,
-                            action="add",
-                            incoming_attribute=attribute,
-                            confidence=attribute.confidence,
-                            reason="append slot keeps distinct values without adjudication",
-                        )
-                    )
+            if result is None or (not result.candidates and result.exact_match is None):
+                resolved.append(AttributeDecision(input_index=input_index, action="add", incoming_attribute=attribute, confidence=attribute.confidence, reason="no attribute candidate found"))
                 continue
-            if result is None or not result.candidates and result.exact_match is None:
-                decisions.append(
-                    AttributeDecision(
-                        input_index=input_index,
-                        action="add",
-                        incoming_attribute=attribute,
-                        confidence=attribute.confidence,
-                        reason="no attribute candidate found",
-                    )
-                )
-                continue
-
-            if result.exact_match is not None:
-                decisions.append(
+            if result.exact_match is not None and getattr(result.exact_match, "status", "active") == "active":
+                resolved.append(
                     AttributeDecision(
                         input_index=input_index,
                         action="merge",
@@ -94,164 +62,169 @@ class AttributeDecisionMaker:
                     )
                 )
                 continue
-
-            best = result.candidates[0]
-            action = decide_candidate_action(attribute.value_text, best)
-            new_value = ""
-            if action == "enrich":
-                new_value = enriched_value(best.value_text, attribute.value_text)
-            elif action == "update":
-                new_value = attribute.value_text
-            if action == "add":
-                decisions.append(
-                    AttributeDecision(
-                        input_index=input_index,
-                        action="add",
-                        incoming_attribute=attribute,
-                        confidence=attribute.confidence,
-                        reason="candidate is related but not proven to be the same fact",
-                    )
-                )
+            if result.exact_match is not None and getattr(result.exact_match, "status", "active") != "active":
+                pending.append((input_index, attribute, result))
                 continue
-            decisions.append(
-                AttributeDecision(
-                    input_index=input_index,
-                    action=action,
-                    incoming_attribute=attribute,
-                    target_attribute_id=best.attribute_id,
-                    target_value_text=best.value_text,
-                    new_value_text=new_value,
-                    confidence=max(attribute.confidence, best.confidence),
-                    reason=f"{action} against top attribute candidate",
-                )
+            if slot_spec(attribute.attr_type).merge_policy == "append":
+                resolved.append(AttributeDecision(input_index=input_index, action="add", incoming_attribute=attribute, confidence=attribute.confidence, reason="append slot keeps distinct values without adjudication"))
+                continue
+            pending.append((input_index, attribute, result))
+        return resolved, pending
+
+    def decide(self, incoming_attributes: list[EntityAttributeInput], retrieval_results: list[AttributeRetrievalResult]) -> list[AttributeDecision]:
+        """Safe synchronous fallback retained for integrations that cannot await a judge.
+
+        It deliberately never uses the removed Chinese token-overlap heuristics.
+        """
+        resolved, pending = self.prefilter(incoming_attributes, retrieval_results)
+        resolved.extend(
+            AttributeDecision(
+                input_index=index,
+                action="add",
+                incoming_attribute=attribute,
+                confidence=attribute.confidence,
+                reason="semantic adjudication deferred",
+                source="rule_fallback",
             )
+            for index, attribute, _ in pending
+        )
+        return sorted(resolved, key=lambda decision: decision.input_index)
+
+    async def decide_async(
+        self,
+        incoming_attributes: list[EntityAttributeInput],
+        retrieval_results: list[AttributeRetrievalResult],
+        *,
+        source_contexts: dict[int, tuple[SourceInfo | None, AttributeWithSources | None]] | None = None,
+        relations: Any | None = None,
+    ) -> list[AttributeDecision]:
+        resolved, pending = self.prefilter(incoming_attributes, retrieval_results)
+        if not pending:
+            return sorted(resolved, key=lambda decision: decision.input_index)
+        if not self.config.attribute_decision_judge_enabled:
+            return self._with_fallback(resolved, pending)
+        try:
+            payload = {
+                "attributes": [build_attribute_decision_payload(attribute, result) | {"input_index": index} for index, attribute, result in pending],
+                "instructions": "Return exactly one decision for every input_index.",
+            }
+            response = await self.llm_client.chat_json(
+                system_prompt=ATTRIBUTE_DECISION_SYSTEM_PROMPT,
+                user_payload=payload,
+                operation_name="KnowLoom attribute decision judge",
+                model=self.config.attribute_decision_judge_model or None,
+            )
+            judged = self._normalize_judgment(response, pending, source_contexts or {}, relations or NoDocumentRelations())
+        except Exception:
+            return self._with_fallback(resolved, pending)
+        return sorted([*resolved, *judged], key=lambda decision: decision.input_index)
+
+    def _with_fallback(self, resolved: list[AttributeDecision], pending: list[tuple[int, EntityAttributeInput, AttributeRetrievalResult]]) -> list[AttributeDecision]:
+        return sorted(
+            [
+                *resolved,
+                *[
+                    AttributeDecision(input_index=index, action="add", incoming_attribute=attribute, confidence=attribute.confidence, reason="attribute judge unavailable; stored without rewriting an existing attribute", source="rule_fallback")
+                    for index, attribute, _ in pending
+                ],
+            ],
+            key=lambda decision: decision.input_index,
+        )
+
+    def _normalize_judgment(
+        self,
+        response: dict[str, Any],
+        pending: list[tuple[int, EntityAttributeInput, AttributeRetrievalResult]],
+        source_contexts: dict[int, tuple[SourceInfo | None, AttributeWithSources | None]],
+        relations: Any,
+    ) -> list[AttributeDecision]:
+        by_index = {index: (attribute, result) for index, attribute, result in pending}
+        payloads = response.get("decisions") if isinstance(response, dict) else None
+        if not isinstance(payloads, list):
+            raise ValueError("attribute judge response must contain decisions")
+        raw_by_index = {item.get("input_index"): item for item in payloads if isinstance(item, dict) and isinstance(item.get("input_index"), int)}
+        decisions: list[AttributeDecision] = []
+        for index, (attribute, result) in by_index.items():
+            raw = raw_by_index.get(index)
+            if raw is None:
+                raise ValueError(f"attribute judge omitted input_index {index}")
+            decisions.append(self._decision_from_judgment(index, attribute, result, raw, source_contexts.get(index), relations))
         return decisions
 
+    def _decision_from_judgment(
+        self,
+        input_index: int,
+        attribute: EntityAttributeInput,
+        result: AttributeRetrievalResult,
+        raw: dict[str, Any],
+        source_context: tuple[SourceInfo | None, AttributeWithSources | None] | None,
+        relations: Any,
+    ) -> AttributeDecision:
+        action = str(raw.get("action") or "review")
+        kind = str(raw.get("kind") or "review")
+        target_id = raw.get("target_attribute_id")
+        valid_targets = {candidate.attribute_id: candidate for candidate in result.candidates[:MAX_ATTRIBUTE_DECISION_CANDIDATES]}
+        if action not in {"add", "merge", "enrich", "update", "conflict", "review"}:
+            return self._queue(input_index, attribute, reason="attribute judge returned an unsupported action")
+        if action not in {"add", "review"} and (not isinstance(target_id, int) or target_id not in valid_targets):
+            return self._queue(input_index, attribute, reason="attribute judge selected a target outside the retrieved candidates")
+        confidence = clamp_confidence(raw.get("confidence"), attribute.confidence)
+        reason = str(raw.get("reason") or "attribute judge decision")
+        candidate = valid_targets.get(target_id) if isinstance(target_id, int) else None
+        if action == "add":
+            return AttributeDecision(input_index=input_index, action="add", incoming_attribute=attribute, confidence=confidence, reason=reason)
+        if action == "merge":
+            return AttributeDecision(input_index=input_index, action="merge", incoming_attribute=attribute, target_attribute_id=int(target_id), target_value_text=candidate.value_text if candidate else "", confidence=confidence, reason=reason)
+        if action == "enrich":
+            complete_value = str(raw.get("new_value_text") or "").strip()
+            if not complete_value:
+                return self._queue(input_index, attribute, target_id, candidate, confidence, "attribute judge omitted complete enrich text")
+            return AttributeDecision(input_index=input_index, action="enrich", incoming_attribute=attribute, target_attribute_id=int(target_id), target_value_text=candidate.value_text if candidate else "", new_value_text=complete_value, confidence=confidence, reason=reason)
+        if action == "update" or kind == "temporal":
+            incoming_source, target = source_context or (None, None)
+            outcome = temporal_outcome(incoming_source, target, confidence, relations) if incoming_source and target else "review"
+            if outcome == "supersede_target":
+                return AttributeDecision(input_index=input_index, action="supersede", incoming_attribute=attribute, target_attribute_id=int(target_id), target_value_text=candidate.value_text if candidate else "", confidence=confidence, reason=reason, kind="temporal")
+            if outcome == "archive_incoming":
+                return AttributeDecision(input_index=input_index, action="archive", incoming_attribute=attribute, target_attribute_id=int(target_id), target_value_text=candidate.value_text if candidate else "", confidence=confidence, reason=reason, kind="temporal")
+            return self._queue(input_index, attribute, target_id, candidate, confidence, reason, kind="temporal", suggestion=str(raw.get("suggestion") or ""))
+        if kind == "contextual":
+            incoming_source, target = source_context or (None, None)
+            outcome, incoming_qualifier, target_qualifier = contextual_outcome(target, confidence, str(raw.get("qualifier_incoming") or ""), str(raw.get("qualifier_target") or ""), incoming_source) if target else ("review", "", "")
+            if outcome == "qualify":
+                return AttributeDecision(input_index=input_index, action="qualify", incoming_attribute=attribute, target_attribute_id=int(target_id), target_value_text=candidate.value_text if candidate else "", confidence=confidence, reason=reason, kind="contextual", qualifier_incoming=incoming_qualifier, qualifier_target=target_qualifier)
+            return self._queue(input_index, attribute, target_id, candidate, confidence, reason, kind="contextual", suggestion=str(raw.get("suggestion") or ""))
+        return self._queue(input_index, attribute, target_id, candidate, confidence, reason, kind="factual" if kind == "factual" else "review", suggestion=str(raw.get("suggestion") or ""))
 
-def decide_candidate_action(incoming_value: str, candidate: AttributeCandidate) -> str:
-    incoming = normalize_text(incoming_value)
-    existing = normalize_text(candidate.value_text)
-    if is_conflict(incoming, existing):
-        return "conflict"
-    if is_update(incoming, existing):
-        return "update"
-    if is_enrichment(incoming, existing):
-        return "enrich"
-    if is_same_fact(incoming, existing):
-        return "merge"
-    return "add"
-
-
-def is_conflict(incoming: str, existing: str) -> bool:
-    if not incoming or not existing:
-        return False
-    if shared_prefix_score(incoming, existing) < 0.35:
-        return False
-    return contains_negation(incoming) != contains_negation(existing)
-
-
-def is_enrichment(incoming: str, existing: str) -> bool:
-    if not incoming or not existing:
-        return False
-    if len(incoming) <= len(existing) * 1.35:
-        return False
-    if shared_prefix_score(incoming, existing) < 0.15 and not any(marker in incoming for marker in DETAIL_MARKERS):
-        return False
-    return True
-
-
-def is_update(incoming: str, existing: str) -> bool:
-    if not incoming or not existing:
-        return False
-    if not any(marker in incoming for marker in UPDATE_MARKERS):
-        return False
-    return shared_prefix_score(incoming, existing) >= 0.35
-
-
-def is_same_fact(incoming: str, existing: str) -> bool:
-    if not incoming or not existing:
-        return False
-    length_ratio = max(len(incoming), len(existing)) / max(1, min(len(incoming), len(existing)))
-    return length_ratio <= 1.35 and shared_prefix_score(incoming, existing) >= 0.85
-
-
-def enriched_value(existing: str, incoming: str) -> str:
-    existing = str(existing or "").strip()
-    incoming = str(incoming or "").strip()
-    if not existing:
-        return incoming
-    if not incoming or incoming == existing:
-        return existing
-    if existing in incoming:
-        return incoming
-    if incoming in existing:
-        return existing
-    return f"{existing}：{incoming}"
+    @staticmethod
+    def _queue(input_index: int, attribute: EntityAttributeInput, target_id: int | None = None, candidate: Any | None = None, confidence: float = 0.0, reason: str = "requires manual review", *, kind: str = "review", suggestion: str = "") -> AttributeDecision:
+        return AttributeDecision(input_index=input_index, action="queue", incoming_attribute=attribute, target_attribute_id=int(target_id) if isinstance(target_id, int) else None, target_value_text=str(getattr(candidate, "value_text", "") or ""), confidence=confidence or attribute.confidence, reason=reason, kind=kind, suggestion=suggestion)
 
 
-def contains_negation(value: str) -> bool:
-    lowered = value.lower()
-    return any(marker in lowered for marker in NEGATION_MARKERS)
+def clamp_confidence(value: Any, default: float) -> float:
+    try:
+        return max(0.0, min(1.0, float(value)))
+    except (TypeError, ValueError):
+        return max(0.0, min(1.0, float(default)))
 
 
-def shared_prefix_score(left: str, right: str) -> float:
-    left_terms = token_set(left)
-    right_terms = token_set(right)
-    if not left_terms or not right_terms:
-        return 0.0
-    return len(left_terms & right_terms) / max(1, min(len(left_terms), len(right_terms)))
-
-
-def token_set(value: str) -> set[str]:
-    normalized = normalize_text(value)
-    words = {part for part in normalized.replace("，", " ").replace("。", " ").replace(",", " ").split() if len(part) > 1}
-    if words:
-        return words
-    return {normalized[index:index + 2] for index in range(max(0, len(normalized) - 1))}
-
-
-def normalize_text(value: str) -> str:
-    return " ".join(str(value or "").strip().split())
-
-
-def build_attribute_decision_payload(
-    incoming_attribute: EntityAttributeInput,
-    retrieval_result: AttributeRetrievalResult,
-    *,
-    history_summaries: dict[int, dict[str, Any]] | None = None,
-) -> dict[str, Any]:
+def build_attribute_decision_payload(incoming_attribute: EntityAttributeInput, retrieval_result: AttributeRetrievalResult, *, history_summaries: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
     history_summaries = history_summaries if history_summaries is not None else retrieval_result.history_summaries
-    candidates: list[dict[str, Any]] = []
-    for candidate in retrieval_result.candidates[:MAX_ATTRIBUTE_DECISION_CANDIDATES]:
-        candidates.append(
-            {
-                "attribute_id": candidate.attribute_id,
-                "attr_type": candidate.attr_type,
-                "value_text": candidate.value_text,
-                "confidence": candidate.confidence,
-                "retrieval": {
-                    "rank": candidate.rank,
-                    "source": candidate.source,
-                    "es_score": candidate.es_score,
-                    "vector_score": candidate.vector_score,
-                    "fused_score": candidate.fused_score,
-                    "exact_match": retrieval_result.exact_match is not None and retrieval_result.exact_match.id == candidate.attribute_id,
-                },
-                "history_summary": strip_evidence(history_summaries.get(candidate.attribute_id, {})),
-            }
-        )
+    candidates = [
+        {
+            "attribute_id": candidate.attribute_id,
+            "attr_type": candidate.attr_type,
+            "value_text": candidate.value_text,
+            "confidence": candidate.confidence,
+            "retrieval": {"rank": candidate.rank, "source": candidate.source, "es_score": candidate.es_score, "vector_score": candidate.vector_score, "fused_score": candidate.fused_score},
+            "history_summary": strip_evidence(history_summaries.get(candidate.attribute_id, {})),
+        }
+        for candidate in retrieval_result.candidates[:MAX_ATTRIBUTE_DECISION_CANDIDATES]
+    ]
     return {
-        "incoming": {
-            "attr_type": incoming_attribute.attr_type,
-            "value_text": incoming_attribute.value_text,
-            "note_id": incoming_attribute.note_id,
-            "block_id": incoming_attribute.block_id,
-            "block_index": incoming_attribute.block_index,
-        },
-        "retrieval": {
-            "mode": retrieval_result.mode,
-            "group_size": retrieval_result.group_size,
-        },
+        "incoming": {"attr_type": incoming_attribute.attr_type, "value_text": incoming_attribute.value_text, "note_id": incoming_attribute.note_id, "block_id": incoming_attribute.block_id, "block_index": incoming_attribute.block_index},
+        "slot": {"name": incoming_attribute.attr_type, "description": slot_spec(incoming_attribute.attr_type).hint},
+        "retrieval": {"mode": retrieval_result.mode, "group_size": retrieval_result.group_size},
         "candidates": candidates,
         "allowed_actions": ["add", "merge", "enrich", "update", "conflict", "review"],
     }

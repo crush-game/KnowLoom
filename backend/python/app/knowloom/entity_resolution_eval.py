@@ -21,9 +21,9 @@ from app.knowloom.entity_admission_eval import summarize_llm_usage
 
 
 BACKEND_PYTHON_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_FIXTURE_PATH = BACKEND_PYTHON_ROOT / "tests" / "KnowLoom" / "fixtures" / "entity_resolution" / "benchmark_v1.json"
-DEFAULT_OUTPUT_PATH = BACKEND_PYTHON_ROOT / "tests" / "KnowLoom" / "results" / "entity_resolution_eval_report.json"
-DEFAULT_OUTPUT_DIR = BACKEND_PYTHON_ROOT / "tests" / "KnowLoom" / "results"
+DEFAULT_FIXTURE_PATH = BACKEND_PYTHON_ROOT / "tests" / "knowloom" / "fixtures" / "entity_resolution" / "benchmark_v1.json"
+DEFAULT_OUTPUT_PATH = BACKEND_PYTHON_ROOT / "tests" / "knowloom" / "results" / "entity_resolution_eval_report.json"
+DEFAULT_OUTPUT_DIR = BACKEND_PYTHON_ROOT / "tests" / "knowloom" / "results"
 DEFAULT_TOP_K = 5
 DEFAULT_PREFLIGHT_RETRY_DELAYS = (2, 4, 8, 16)
 DEFAULT_STRATEGY = "hybrid_rrf_baseline"

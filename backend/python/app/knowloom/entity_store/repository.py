@@ -372,11 +372,15 @@ class MySQLEntityRepository(IngestJobRepositoryMixin, AttributeDecisionRepositor
                         a.value_text,
                         a.value_fingerprint,
                         a.confidence,
-                        a.status
+                        a.status,
+                        a.qualifier,
+                        a.superseded_by,
+                        a.superseded_reason,
+                        a.manually_confirmed
                     FROM knowloom_entity_attributes a
                     INNER JOIN knowloom_entities e ON e.id = a.entity_id
                     WHERE a.entity_id = %s
-                      AND a.status = 'active'
+                      AND a.status IN ('active', 'superseded')
                       AND a.attr_type IN ({type_placeholders})
                       AND a.value_fingerprint IN ({fingerprint_placeholders})
                     ORDER BY a.id
