@@ -13,7 +13,7 @@ from app.knowloom.entity_store.normalizer import apply_glossary, text_fingerprin
 from app.knowloom.models import KnowLoomIndexSearchResult, KnowLoomPreprocessResult, KnowLoomQueryResult
 from app.knowloom.services import KnowLoomProcessor, KnowLoomQueryService, KnowLoomRetriever
 from app.knowloom.services.ask import KnowLoomAskService
-from app.knowloom.services.file_text import extract_file_text
+from app.knowloom.services.file_text import FileTooLarge, ScannedPdf, convert_file, persist_original_file
 from app.knowloom.services.graph_generation import KnowLoomGraphGenerationService
 from app.knowloom.services.pipeline_debug import extraction_stage_payload, run_debug_pipeline
 from app.knowloom.services.doc_meta import suggest_effective_at
@@ -51,6 +51,8 @@ class KnowLoomIngestRequest(BaseModel):
     published_at: str = ""
     effective_at: str = ""
     glossary: list[GlossaryItem] = Field(default_factory=list)
+    original_file_path: str = Field(default="", exclude=True)
+    page_map: list[dict[str, int]] = Field(default_factory=list, exclude=True)
     scope: KnowLoomScopePayload = Field(default_factory=KnowLoomScopePayload)
 
 
@@ -160,12 +162,17 @@ def debug_extract_payload(preprocess: KnowLoomPreprocessResult) -> dict[str, obj
 
 @router.post("/upload", response_model=KnowLoomIngestResponse)
 async def upload_file(file: UploadFile = File(...), task_name: str = "", title: str = "", doc_key: str = "", doc_number: str = "", doc_kind: str = "regulation", issuer: str = "", issuer_level: str = "university", audience: str = "", published_at: str = "", effective_at: str = "") -> KnowLoomIngestResponse:
+    content = await file.read(20 * 1024 * 1024 + 1)
     try:
-        text = extract_file_text(file.filename or "", await file.read())
+        conversion = await asyncio.to_thread(convert_file, file.filename or "", content)
+        original_path = await asyncio.to_thread(persist_original_file, file.filename or "", content)
+    except FileTooLarge as exc:
+        raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(exc)) from exc
+    except ScannedPdf as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return await ingest_text(KnowLoomIngestRequest(text=text, note_id=doc_key, task_name=task_name, title=title or (file.filename or ""), doc_number=doc_number, doc_kind=doc_kind, issuer=issuer, issuer_level=issuer_level, audience=audience, published_at=published_at, effective_at=effective_at))
-
+    return await ingest_text(KnowLoomIngestRequest(text=conversion.text, note_id=doc_key, task_name=task_name, title=title or (file.filename or ""), doc_number=doc_number, doc_kind=doc_kind, issuer=issuer, issuer_level=issuer_level, audience=audience, published_at=published_at, effective_at=effective_at, original_file_path=original_path, page_map=conversion.page_map))
 
 @router.post("/ingest", response_model=KnowLoomIngestResponse)
 async def ingest_text(request: KnowLoomIngestRequest) -> KnowLoomIngestResponse:
@@ -462,4 +469,6 @@ def document_metadata_from_request(request: KnowLoomIngestRequest) -> DocumentMe
         source_url=request.source_url,
         published_at=request.published_at,
         effective_at=request.effective_at,
+        original_file_path=request.original_file_path,
+        page_map=request.page_map,
     )

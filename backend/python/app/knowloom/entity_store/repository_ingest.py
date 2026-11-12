@@ -163,17 +163,17 @@ class IngestJobRepositoryMixin:
             INSERT INTO knowloom_documents (
                 workspace_id, project_id, collection_id, domain, scope_hash, doc_key, version_no,
                 title, doc_number, doc_kind, issuer, issuer_level, audience, source_url,
-                published_at, effective_at, content_text, content_fingerprint, status
+                published_at, effective_at, content_text, content_fingerprint, original_file_path, page_map_json, status
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, 'active')
+                    NULLIF(%s, ''), NULLIF(%s, ''), %s, %s, %s, %s, 'active')
             """,
             (
                 scope.workspace_id, scope.project_id, scope.collection_id, scope.domain,
                 scope_hash(scope), key, version_no, metadata.title[:255], metadata.doc_number[:64],
                 metadata.doc_kind[:32] or 'regulation', metadata.issuer[:128],
                 metadata.issuer_level[:16] or 'university', metadata.audience[:128], metadata.source_url[:1024],
-                metadata.published_at, metadata.effective_at, input_text, fingerprint,
+                metadata.published_at, metadata.effective_at, input_text, fingerprint, metadata.original_file_path[:1024], json.dumps(metadata.page_map, ensure_ascii=False) if metadata.page_map else None,
             ),
         )
         return int(cursor.lastrowid)

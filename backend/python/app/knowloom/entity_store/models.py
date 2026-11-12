@@ -48,6 +48,8 @@ class DocumentMetadata:
     source_url: str = ""
     published_at: str = ""
     effective_at: str = ""
+    original_file_path: str = ""
+    page_map: list[dict[str, int]] = field(default_factory=list)
 
 
 @dataclass(slots=True)

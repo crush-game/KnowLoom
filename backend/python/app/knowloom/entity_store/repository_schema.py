@@ -107,6 +107,14 @@ def ensure_attribute_conflict_columns(cursor: Any) -> None:
 
 def ensure_document_layer_schema(cursor: Any) -> None:
     """Backfill the D-002 document-layer columns for databases created before this release."""
+    cursor.execute("SHOW TABLES LIKE 'knowloom_documents'")
+    if cursor.fetchone():
+        cursor.execute("SHOW COLUMNS FROM knowloom_documents")
+        document_columns = {str(row["Field"]) for row in cursor.fetchall()}
+        if "original_file_path" not in document_columns:
+            cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN original_file_path VARCHAR(1024) NOT NULL DEFAULT '' AFTER content_fingerprint")
+        if "page_map_json" not in document_columns:
+            cursor.execute("ALTER TABLE knowloom_documents ADD COLUMN page_map_json JSON NULL AFTER original_file_path")
     cursor.execute("SHOW TABLES LIKE 'knowloom_entity_attribute_evidence'")
     if cursor.fetchone():
         cursor.execute("SHOW COLUMNS FROM knowloom_entity_attribute_evidence")

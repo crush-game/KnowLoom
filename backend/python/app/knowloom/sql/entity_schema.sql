@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS knowloom_documents (
     effective_at DATE NULL,
     content_text MEDIUMTEXT NOT NULL,
     content_fingerprint CHAR(64) NOT NULL,
+    original_file_path VARCHAR(1024) NOT NULL DEFAULT '',
+    page_map_json JSON NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'active',
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE KEY uk_knowloom_doc_version (scope_hash, doc_key, version_no),
